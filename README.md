@@ -13,6 +13,7 @@ This are the files to configure properly zsh on my mac.
 - neovim: brew install neovim
 - lazy vim: get the last version [here](https://www.lazyvim.org/)
 - fzf: brew install fzf.
+- Some random terminal that supports nerd-fonts, like [Alacritty](https://alacritty.org/) or [ghostty](https://ghostty.org/).
 
 ## Files included:
 - .zshrc with already configured subfiles divisions
@@ -61,8 +62,23 @@ brew install fzf
 # We clone this repo and move things around
 git clone https://github.com/candradesm/zsh-config
 rm -rf zsh-config/.git
+rm -rf zsh-config/README.md zsh-config/staitc
 mv zsh-config/* ~/
 
 # Finally, set down everything
 source .zshrc
 ```
+
+## How does it look
+```bash
+Last login: Tue Feb  3 18:00:48 on ttys004
+
+🐵 JUNIOR MONKE WISDOM FROM THE PROPHECY 🍌
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Never assume you know everything. Ask questions when uncertain. 🤝
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+For the Golden Bananzas! ☀️🍌✨
+
+➜  zsh-config git:(main) ✗
+````
+![](./static/image.png)
