@@ -7,12 +7,12 @@ This are the files to configure properly zsh on my mac.
 - Plugins for oh-my-zsh: 
   - git: included already with oh-my-zsh
   - timer: included already with oh-my-zsh
-  - thefuck: brew install the fuck
-  - zsh-autosuggestions: git clone https://github.com/zsh-users/zsh-autosuggestions.git
-  - zsh-syntax-highlighting: git clone https://github.com/zsh-users/zsh-syntax-highlighting.git
-- neovim: brew install neovim
+  - thefuck: `brew install the fuck`
+  - zsh-autosuggestions: `git clone https://github.com/zsh-users/zsh-autosuggestions.git`
+  - zsh-syntax-highlighting: `git clone https://github.com/zsh-users/zsh-syntax-highlighting.git`
+- neovim: `brew install neovim`
 - lazy vim: get the last version [here](https://www.lazyvim.org/)
-- fzf: brew install fzf.
+- fzf: `brew install fzf`.
 - Some random terminal that supports nerd-fonts, like [Alacritty](https://alacritty.org/) or [ghostty](https://ghostty.org/).
 
 ## Files included:
@@ -27,9 +27,11 @@ This files should be put on your home folder (~) and overwrite your currect .zsh
 
 You can clone this project and execute a mv command to move everything to there:
 
-**WARNING!** before executing anything, make a backup of your current configuration. Be warned it will be lost forever.
+> [!WARNING]
+> Before executing anything, make a backup of your current zsh configuration. Be warned, it will be lost forever.
 
-**WARNING!** NEVER execute commands found randomly on internet. Go to the source and execute their given commands. Be warned, any random link found on internet could contain malware. The following commands are a demostration of the proccess on which we are going to download and configure everything in order for this repo to work.
+> [!WARNING] 
+> NEVER execute commands found randomly on internet. Go to the source and execute their given commands. Be warned, any random link found on internet could contain malware. The following commands are a demostration of the proccess on which we are going to download and configure everything in order for this repo to work.
 
 ```bash
 # OhMyZSH dependencies
