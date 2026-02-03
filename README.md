@@ -28,6 +28,7 @@ This files should be put on your home folder (~) and overwrite your currect .zsh
 You can clone this project and execute a mv command to move everything to there:
 
 **WARNING!** before executing anything, make a backup of your current configuration. Be warned it will be lost forever.
+
 **WARNING!** NEVER execute commands found randomly on internet. Go to the source and execute their given commands. Be warned, any random link found on internet could contain malware. The following commands are a demostration of the proccess on which we are going to download and configure everything in order for this repo to work.
 
 ```bash
