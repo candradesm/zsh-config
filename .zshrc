@@ -1,5 +1,5 @@
 # PATH
-export PATH=$PATH:/opt/homebrew/bin:/Users/cristianandrades/Library/Android/sdk/platform-tools/:/opt/homebrew/opt/ruby/bin:/Users/cristianandrades/Library/Python/3.9/bin
+export PATH=$PATH:/opt/homebrew/bin:$HOME/Library/Android/sdk/platform-tools/:/opt/homebrew/opt/ruby/bin:$HOME/Library/Python/3.9/bin
 export PATH="$HOME/.local/bin:$PATH"
 export ZSH_CONFIG="$HOME/.zsh-config"
 
