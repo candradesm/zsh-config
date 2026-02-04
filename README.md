@@ -7,7 +7,7 @@ This are the files to configure properly zsh on my mac.
 - Plugins for oh-my-zsh: 
   - git: included already with oh-my-zsh
   - timer: included already with oh-my-zsh
-  - thefuck: `brew install the fuck`
+  - thefuck: `brew install thefuck`
   - zsh-autosuggestions: `git clone https://github.com/zsh-users/zsh-autosuggestions.git`
   - zsh-syntax-highlighting: `git clone https://github.com/zsh-users/zsh-syntax-highlighting.git`
 - neovim: `brew install neovim`
