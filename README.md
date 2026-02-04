@@ -65,7 +65,7 @@ brew install fzf
 # We clone this repo and move things around
 git clone https://github.com/candradesm/zsh-config
 rm -rf zsh-config/.git
-rm -rf zsh-config/README.md zsh-config/staitc
+rm -rf zsh-config/README.md zsh-config/static
 mv zsh-config/* ~/
 
 # Finally, set down everything
