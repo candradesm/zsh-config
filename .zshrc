@@ -8,4 +8,4 @@ source $ZSH_CONFIG/custom-config.sh
 source $ZSH_CONFIG/zara-custom-config.sh
 source $ZSH_CONFIG/golden-wisdom.sh
 
-banaza
+bananza
