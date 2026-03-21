@@ -1,0 +1,134 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": [".github/*.md"],
+  "share": "disabled",
+  "permission": {
+    "bash": {
+      "*sh -c *": "ask",
+      "chmod *": "ask",
+      "chown *": "ask",
+      "curl *": "ask",
+      "npm *": "ask",
+      "python -c *": "ask",
+      "ruby -e *": "ask",
+      "scp *": "ask",
+      "sftp *": "ask",
+      "ssh*": "ask",
+      "sudo *": "ask",
+      "wget *": "ask",
+      "brew *": "deny",
+      "nc *": "deny",
+      "ncat *": "deny",
+      "node -e *": "deny",
+      "openssl s_client*": "deny",
+      "perl -e *": "deny",
+      "php -r *": "deny",
+      "telnet *": "deny"
+    }
+  },
+  "mcp": {
+    "github": {
+      "type": "remote",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "enabled": true,
+      "headers": {
+        "Authorization": "Bearer {env:GITHUB_TOKEN}"
+      }
+    }
+  },
+  "agent": {
+    "coordinator": {
+      "description": "Warrior Monke 🦧 — THE JUNGLE coordinator. Analyzes tasks, creates plans, and delegates to subagents.",
+      "mode": "primary",
+      "prompt": "{file:./.agents/coordinator.md}",
+      "tools": {
+        "write": false,
+        "edit": false,
+        "bash": false
+      }
+    },
+    "developer": {
+      "description": "Implementation agent that writes code, fixes bugs, and creates tests for the jungle",
+      "mode": "subagent",
+      "model": "opencode-go/kimi-k2.5",
+      "temperature": 0.2,
+      "prompt": "{file:./.agents/subagents/developer.md}",
+      "tools": {
+        "write": true,
+        "edit": true,
+        "bash": true
+      }
+    },
+    "qa": {
+      "description": "QA agent that runs project checks before CI/CD and ensures the jungle is in good shape",
+      "mode": "subagent",
+      "model": "opencode-go/minimax-m2.5",
+      "temperature": 0,
+      "prompt": "{file:./.agents/subagents/qa.md}",
+      "tools": {
+        "write": false,
+        "edit": false,
+        "bash": true
+      }
+    },
+    "reviewer": {
+      "description": "Reviewer agent that performs code reviews and provides feedback to the jungle",
+      "mode": "subagent",
+      "model": "opencode-go/glm-5",
+      "temperature": 0,
+      "prompt": "{file:./.agents/subagents/reviewer.md}",
+      "tools": {
+        "write": false,
+        "edit": false,
+        "bash": true
+      }
+    },
+    "testing": {
+      "description": "Testing agent that creates tests for the jungle",
+      "mode": "subagent",
+      "model": "opencode-go/kimi-k2.5",
+      "temperature": 0,
+      "prompt": "{file:./.agents/subagents/testing.md}",
+      "tools": {
+        "write": true,
+        "edit": true,
+        "bash": true
+      }
+    }
+  },
+  "provider": {
+    "mlx-lm": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Mlx Vlm",
+      "options": {
+        "baseURL": "http://127.0.0.1:8080/"
+      },
+      "models": {
+        "mlx-community/Qwen3.5-4B-OptiQ-4bit": {
+          "name": "Qwen3.5 4B OptiQ",
+          "reasoning": true,
+          "tool_call": true,
+          "max_tokens": 655366
+        },
+        "mlx-community/Qwen3.5-4B-MLX-4bit": {
+          "name": "Qwen3.5 4B",
+          "reasoning": true,
+          "tool_call": true,
+          "max_tokens": 65536
+        },
+        "mlx-community/Qwen3.5-9B-MLX-4bit": {
+          "name": "Qwen3.5 9B",
+          "reasoning": true,
+          "tool_call": true,
+          "max_tokens": 65536,
+        },
+        "mlx-community/Qwen3.5-9B-OptiQ-4bit": {
+          "name": "Qwen 3.5 9B OptiQ",
+          "reasoning": true,
+          "tool_call": true,
+          "max_tokens":655536
+        },
+      }
+    }
+  }
+}
