@@ -1,6 +1,8 @@
 # Full Development Environment Config
 
-A complete development environment configuration for macOS including:
+A complete development environment configuration for **macOS and Linux** including:
+
+> ⚠️ **Not supported:** Windows (use WSL2 if you must)
 - ZSH shell with oh-my-zsh and custom plugins
 - Neovim with LazyVim and Android development support
 - Opencode AI assistant configuration
@@ -11,6 +13,7 @@ A complete development environment configuration for macOS including:
 - `.zshrc` with modular configuration and custom functions
 - oh-my-zsh with plugins: git, timer, thefuck, autosuggestions, syntax-highlighting
 - Custom welcome messages and utility functions
+- **See [`.zsh-config/README.md`](.zsh-config/README.md)** for detailed documentation of all configuration files
 
 ### Neovim (Full IDE)
 Complete LazyVim configuration with:
@@ -40,6 +43,7 @@ Complete LazyVim configuration with:
   - zsh-autosuggestions: `git clone https://github.com/zsh-users/zsh-autosuggestions.git ~/.oh-my-zsh/custom/plugins/zsh-autosuggestions`
   - zsh-syntax-highlighting: `git clone https://github.com/zsh-users/zsh-syntax-highlighting.git ~/.oh-my-zsh/custom/plugins/zsh-syntax-highlighting`
 - **fzf**: `brew install fzf`
+- **fd**: `brew install fd` (fast file finder, required for telescope file search)
 - **Nerd-fonts terminal**: [Alacritty](https://alacritty.org/) or [Ghostty](https://ghostty.org/)
 
 ### Optional (for Android Development)
@@ -71,7 +75,7 @@ mv ~/.config/nvim{,.bak.$(date +%Y%m%d)} 2>/dev/null || true
 mv ~/.config/opencode{,.bak.$(date +%Y%m%d)} 2>/dev/null || true
 
 # 4. Install dependencies
-brew install neovim thefuck fzf
+brew install neovim thefuck fzf fd
 
 # 5. Clone this repo and set up configs
 git clone https://github.com/candradesm/zsh-config ~/.config-temp

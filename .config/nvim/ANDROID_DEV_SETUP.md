@@ -73,7 +73,7 @@ The following tools will be automatically installed when you open relevant files
 │   └── lazy.lua                       # MODIFIED: Added extras imports
 ├── lua/plugins/
 │   ├── android.lua                    # NEW: Core Android development setup
-│   └── android-extras.lua             # NEW: Optional features (disabled)
+│   └── android-nice-to-have.lua       # NEW: Optional features (disabled)
 ├── ANDROID_DEV_SETUP.md               # This file
 └── lazy-lock.json                     # Will be auto-updated
 ```
@@ -169,7 +169,7 @@ Both Kotlin and Java debuggers will be configured with:
 
 ---
 
-## Nice-to-Have Features (`android-extras.lua`)
+## Nice-to-Have Features (`android-nice-to-have.lua`)
 
 These features are **commented out by default** and can be enabled later.
 
