@@ -1,0 +1,162 @@
+-- Nice-to-Have Android Development Features
+-- These are OPTIONAL and disabled by default
+-- Uncomment sections below to enable features
+-- 
+-- Features include:
+-- - Full Android IDE plugin (build, run, logcat, AVD)
+-- - Terminal-based ADB shortcuts
+-- - Advanced testing integration
+
+return {
+  -- ==========================================
+  -- OPTION A: FULL ANDROID IDE PLUGIN
+  -- ==========================================
+  -- Plugin: iamironz/android-nvim-plugin
+  -- Features: Gradle tasks, ADB, Logcat, AVD management
+  --
+  -- Uncomment the section below to enable:
+  --
+  -- {
+  --   "iamironz/android-nvim-plugin",
+  --   dependencies = { "nvim-lua/plenary.nvim" },
+  --   ft = { "kotlin", "java", "groovy", "xml" },
+  --   cmd = {
+  --     "AndroidBuild",
+  --     "AndroidRun",
+  --     "AndroidInstall",
+  --     "AndroidLogcat",
+  --     "AndroidDevices",
+  --     "AndroidEmulator",
+  --   },
+  --   config = function()
+  --     require("android").setup({
+  --       -- Default gradle wrapper command
+  --       gradle_cmd = "./gradlew",
+  --       -- ADB path (auto-detected if not set)
+  --       -- adb_path = "~/Library/Android/sdk/platform-tools/adb",
+  --     })
+  --   end,
+  --   keys = {
+  --     { "<leader>ab", "<cmd>AndroidBuild<cr>", desc = "Android Build" },
+  --     { "<leader>ar", "<cmd>AndroidRun<cr>", desc = "Android Run" },
+  --     { "<leader>ai", "<cmd>AndroidInstall<cr>", desc = "Android Install" },
+  --     { "<leader>al", "<cmd>AndroidLogcat<cr>", desc = "Android Logcat" },
+  --     { "<leader>ad", "<cmd>AndroidDevices<cr>", desc = "Android Devices" },
+  --     { "<leader>ae", "<cmd>AndroidEmulator<cr>", desc = "Android Emulator" },
+  --   },
+  -- },
+
+  -- ==========================================
+  -- OPTION B: TERMINAL-BASED ADB SHORTCUTS
+  -- ==========================================
+  -- Simple keymaps using built-in terminal
+  -- No additional plugins required
+  --
+  -- Uncomment the section below to enable:
+  --
+  -- {
+  --   "LazyVim/LazyVim",
+  --   init = function()
+  --     -- ADB device list
+  --     vim.keymap.set("n", "<leader>ad", function()
+  --       vim.cmd("split | terminal adb devices")
+  --     end, { desc = "ADB Devices" })
+  --
+  --     -- ADB logcat
+  --     vim.keymap.set("n", "<leader>al", function()
+  --       vim.cmd("split | terminal adb logcat")
+  --     end, { desc = "ADB Logcat" })
+  --
+  --     -- ADB install APK (prompts for path)
+  --     vim.keymap.set("n", "<leader>ai", function()
+  --       local apk = vim.fn.input("APK path: ", "", "file")
+  --       if apk ~= "" then
+  --         vim.cmd("split | terminal adb install " .. vim.fn.shellescape(apk))
+  --       end
+  --     end, { desc = "ADB Install APK" })
+  --
+  --     -- ADB shell
+  --     vim.keymap.set("n", "<leader>as", function()
+  --       vim.cmd("split | terminal adb shell")
+  --     end, { desc = "ADB Shell" })
+  --
+  --     -- ADB reboot
+  --     vim.keymap.set("n", "<leader>aR", function()
+  --       vim.cmd("split | terminal adb reboot")
+  --     end, { desc = "ADB Reboot" })
+  --   end,
+  -- },
+
+  -- ==========================================
+  -- OPTION C: ADVANCED TESTING INTEGRATION
+  -- ==========================================
+  -- Uses neotest for running Java/Kotlin tests
+  -- Requires additional adapters when available
+  --
+  -- Uncomment the section below to enable:
+  --
+  -- {
+  --   "nvim-neotest/neotest",
+  --   dependencies = {
+  --     "nvim-neotest/nvim-nio",
+  --     "nvim-lua/plenary.nvim",
+  --     "antoinemadec/FixCursorHold.nvim",
+  --     "nvim-treesitter/nvim-treesitter",
+  --   },
+  --   config = function()
+  --     require("neotest").setup({
+  --       adapters = {
+  --         -- Note: Java/Kotlin adapters for neotest are limited
+  --         -- You may need to use jdtls test runner instead
+  --       },
+  --     })
+  --   end,
+  --   keys = {
+  --     { "<leader>tt", function() require("neotest").run.run() end, desc = "Run Nearest Test" },
+  --     { "<leader>tT", function() require("neotest").run.run(vim.fn.expand("%")) end, desc = "Run File Tests" },
+  --     { "<leader>ts", function() require("neotest").summary.toggle() end, desc = "Test Summary" },
+  --     { "<leader>to", function() require("neotest").output.open() end, desc = "Test Output" },
+  --   },
+  -- },
+
+  -- ==========================================
+  -- GRADLE TASK RUNNER (ALTERNATIVE)
+  -- ==========================================
+  -- Simple gradle task runner using toggleterm
+  -- Works with gradle wrapper
+  --
+  -- Uncomment the section below to enable:
+  --
+  -- {
+  --   "LazyVim/LazyVim",
+  --   init = function()
+  --     -- Run gradle build
+  --     vim.keymap.set("n", "<leader>gb", function()
+  --       vim.cmd("split | terminal ./gradlew build")
+  --     end, { desc = "Gradle Build" })
+  --
+  --     -- Run gradle test
+  --     vim.keymap.set("n", "<leader>gt", function()
+  --       vim.cmd("split | terminal ./gradlew test")
+  --     end, { desc = "Gradle Test" })
+  --
+  --     -- Run gradle clean
+  --     vim.keymap.set("n", "<leader>gc", function()
+  --       vim.cmd("split | terminal ./gradlew clean")
+  --     end, { desc = "Gradle Clean" })
+  --
+  --     -- Run gradle assemble
+   --     vim.keymap.set("n", "<leader>ga", function()
+  --       vim.cmd("split | terminal ./gradlew assemble")
+  --     end, { desc = "Gradle Assemble" })
+  --
+  --     -- Custom gradle task (prompt)
+  --     vim.keymap.set("n", "<leader>gr", function()
+  --       local task = vim.fn.input("Gradle task: ", "")
+  --       if task ~= "" then
+  --         vim.cmd("split | terminal ./gradlew " .. task)
+  --       end
+  --     end, { desc = "Gradle Run Task" })
+  --   end,
+  -- },
+}
