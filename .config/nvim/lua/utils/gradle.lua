@@ -1,6 +1,7 @@
--- Gradle Integration for Kotlin Language Server
--- Works with any Gradle project: Android, Ktor, pure Kotlin, etc.
--- Provides dynamic classpath extraction with hybrid auto-detection
+-- Gradle Integration Utilities
+-- Provides project detection, module detection, JVM target detection,
+-- and manual Gradle commands. Does NOT inject classpath into LSP —
+-- kotlin-language-server handles its own Gradle sync internally.
 
 local M = {}
 
@@ -8,54 +9,40 @@ local M = {}
 -- CONFIGURATION
 -- ============================================================================
 
--- Environment variables for configuration (defined once)
-local GRADLE_TIMEOUT = tonumber(vim.env.GRADLE_TIMEOUT) or tonumber(vim.env.ANDROID_GRADLE_TIMEOUT) or 120000
-local GRADLE_FEEDBACK_LEVEL = vim.env.GRADLE_FEEDBACK or vim.env.ANDROID_GRADLE_FEEDBACK or "medium" -- minimal, medium, verbose
+local GRADLE_TIMEOUT = tonumber(vim.env.GRADLE_TIMEOUT) or 120000
+local GRADLE_FEEDBACK_LEVEL = vim.env.GRADLE_FEEDBACK or "medium"
 
--- Timeouts (in milliseconds)
 local TIMEOUTS = {
-  SYNC_INTERVAL = 300000,     -- 5 minutes
-  DEFAULT = GRADLE_TIMEOUT,    -- Default command timeout
-  DISCOVERY = 60000,          -- Deep discovery timeout  
-  FAST_PATH = 30000,          -- Single config attempt timeout
+  DEFAULT = GRADLE_TIMEOUT,
+  DISCOVERY = 60000,
+  FAST_PATH = 30000,
 }
 
--- Priority order for fast path attempts
 local FAST_PATH_CONFIGS = {
-  "debugCompileClasspath",  -- Android debug
-  "releaseCompileClasspath", -- Android release
-  "compileClasspath",        -- Standard
-  "implementation",          -- Gradle implementation
-  "runtimeClasspath",        -- Runtime deps
+  "debugCompileClasspath",
+  "releaseCompileClasspath",
+  "compileClasspath",
+  "implementation",
+  "runtimeClasspath",
 }
 
--- Pre-compute gradle cache paths (vim.fn.expand can't be used in async callbacks)
 local GRADLE_CACHE_PATHS = {
   vim.fn.expand("~/.gradle/caches/modules-2/files-2.1"),
   vim.fn.expand("~/.gradle/caches/build-cache-1"),
 }
 
--- Default cache directory
 local DEFAULT_CACHE_DIR = vim.fn.expand("~/.cache/nvim/gradle")
 
 -- ============================================================================
 -- UTILITY FUNCTIONS
 -- ============================================================================
 
----Log message based on feedback level
----@param message string
----@param level string "minimal" | "medium" | "verbose"
----@param notify_level number|nil vim.log.levels value
 local function log(message, level, notify_level)
   notify_level = notify_level or vim.log.levels.INFO
-  local current_level = GRADLE_FEEDBACK_LEVEL
-
-  -- Level hierarchy: minimal (1) < medium (2) < verbose (3)
   local levels = { minimal = 1, medium = 2, verbose = 3 }
   local msg_level = levels[level] or 2
-  local cfg_level = levels[current_level] or 2
+  local cfg_level = levels[GRADLE_FEEDBACK_LEVEL] or 2
 
-  -- Only show message if it's at or below the configured level
   if msg_level > cfg_level then
     return
   end
@@ -63,8 +50,6 @@ local function log(message, level, notify_level)
   vim.notify(message, notify_level)
 end
 
----Get cache directory for gradle-related files
----@return string cache_dir
 function M.get_cache_dir()
   local custom_cache = vim.env.GRADLE_CACHE_DIR or vim.env.NVIM_ANDROID_CACHE_DIR
   if custom_cache then
@@ -77,13 +62,9 @@ end
 -- PROJECT DETECTION
 -- ============================================================================
 
----Find Gradle project root from a file path
----@param filepath string
----@return string|nil project_root
 function M.find_project_root(filepath)
   local path = vim.fn.fnamemodify(filepath, ":p:h")
 
-  -- Walk up directory tree looking for build.gradle or settings.gradle
   while path and path ~= "/" and path ~= "" do
     local settings_gradle = path .. "/settings.gradle"
     local settings_gradle_kts = path .. "/settings.gradle.kts"
@@ -97,10 +78,8 @@ function M.find_project_root(filepath)
       return path
     end
 
-    -- Also check for parent with settings.gradle
     if vim.fn.filereadable(build_gradle) == 1 or
        vim.fn.filereadable(build_gradle_kts) == 1 then
-      -- Check if there's a parent settings.gradle
       local parent = vim.fn.fnamemodify(path, ":h")
       if parent ~= path then
         if vim.fn.filereadable(parent .. "/settings.gradle") == 1 or
@@ -117,22 +96,17 @@ function M.find_project_root(filepath)
   return nil
 end
 
----Check if current directory is a Gradle project
----@param filepath string|nil Optional file path to check (defaults to current buffer)
----@return boolean is_gradle_project
 function M.is_gradle_project(filepath)
   local path = filepath or vim.fn.expand("%:p")
   if path == "" then
     path = vim.fn.getcwd()
   end
 
-  -- Get project root
   local root = M.find_project_root(path)
   if not root then
     return false
   end
 
-  -- Check for Gradle indicators
   local indicators = {
     root .. "/build.gradle",
     root .. "/build.gradle.kts",
@@ -150,23 +124,17 @@ function M.is_gradle_project(filepath)
   return false
 end
 
----Detect available gradle modules
----@param project_root string
----@return string[] modules List of module prefixes like "app:", "library:"
 function M.detect_modules(project_root)
   local modules = {}
 
-  -- Check for app module (most common)
   if vim.fn.isdirectory(project_root .. "/app") == 1 then
     table.insert(modules, "app:")
   end
 
-  -- Scan for other modules
   local dirs = vim.fn.glob(project_root .. "/*", false, true)
   for _, dir in ipairs(dirs) do
     if vim.fn.isdirectory(dir) == 1 then
       local name = vim.fn.fnamemodify(dir, ":t")
-      -- Skip common non-module directories
       if name ~= ".git" and name ~= ".idea" and name ~= "build" and
          name ~= ".gradle" and name ~= "gradle" and name ~= "app" then
         if vim.fn.filereadable(dir .. "/build.gradle") == 1 or
@@ -184,9 +152,6 @@ end
 -- CACHE MANAGEMENT
 -- ============================================================================
 
----Get the cache file path for a project
----@param project_root string
----@return string cache_file
 function M.get_cache_file(project_root)
   local cache_dir = M.get_cache_dir()
   vim.fn.mkdir(cache_dir, "p")
@@ -194,9 +159,6 @@ function M.get_cache_file(project_root)
   return cache_dir .. "/classpath_" .. safe_name .. ".json"
 end
 
----Load cached classpath for a project
----@param project_root string
----@return table|nil classpath_data
 function M.load_cached_classpath(project_root)
   local cache_file = M.get_cache_file(project_root)
 
@@ -215,7 +177,6 @@ function M.load_cached_classpath(project_root)
     return nil
   end
 
-  -- Check if cache is still valid
   local build_gradle = project_root .. "/build.gradle"
   local build_gradle_kts = project_root .. "/build.gradle.kts"
   local gradle_file = vim.fn.filereadable(build_gradle) == 1 and build_gradle or build_gradle_kts
@@ -231,9 +192,6 @@ function M.load_cached_classpath(project_root)
   return data
 end
 
----Save classpath to cache
----@param project_root string
----@param classpath_data table
 function M.save_cached_classpath(project_root, classpath_data)
   local cache_file = M.get_cache_file(project_root)
 
@@ -256,9 +214,6 @@ function M.save_cached_classpath(project_root, classpath_data)
   end
 end
 
----Get cached gradle config (successful module+config combo)
----@param project_root string
----@return table|nil cached_config
 function M.get_cached_gradle_config(project_root)
   local cache_file = M.get_cache_file(project_root):gsub("classpath_", "gradle_config_")
 
@@ -279,10 +234,6 @@ function M.get_cached_gradle_config(project_root)
   return nil
 end
 
----Save successful gradle configuration to cache
----@param project_root string
----@param module string
----@param configuration string
 function M.save_gradle_config(project_root, module, configuration)
   local cache_file = M.get_cache_file(project_root):gsub("classpath_", "gradle_config_")
 
@@ -302,7 +253,6 @@ function M.save_gradle_config(project_root, module, configuration)
   end
 end
 
----Clear all cached classpaths
 function M.clear_cache()
   local cache_dir = M.get_cache_dir()
   local files = vim.fn.glob(cache_dir .. "/*.json", false, true)
@@ -316,10 +266,6 @@ end
 -- JVM TARGET DETECTION
 -- ============================================================================
 
----Auto-detect JVM target version from project gradle files
----Works for all Gradle projects (Android, Ktor, pure Kotlin, etc.)
----@param project_root string|nil Optional project root path
----@return string|nil detected_version The detected JVM version or nil
 function M.detect_jvm_target(project_root)
   local root = project_root or M.find_project_root(vim.fn.expand("%:p"))
   if not root then
@@ -338,32 +284,27 @@ function M.detect_jvm_target(project_root)
     if vim.fn.filereadable(filepath) == 1 then
       local content = table.concat(vim.fn.readfile(filepath, "", 100), "\n")
 
-      -- Check for jvmToolchain(X) or jvmToolchain = X
       local toolchain = content:match("jvmToolchain%((%d+)%)") or
                         content:match("jvmToolchain%s*=%s*(%d+)")
       if toolchain then
         return toolchain
       end
 
-      -- Check for JavaVersion.VERSION_XX
       local java_version = content:match("JavaVersion%.VERSION_(%d+)")
       if java_version then
         return java_version
       end
 
-      -- Check for sourceCompatibility = JavaVersion.VERSION_XX
       local source_compat = content:match("sourceCompatibility%s*=%s*JavaVersion%.VERSION_(%d+)")
       if source_compat then
         return source_compat
       end
 
-      -- Check for targetCompatibility = JavaVersion.VERSION_XX
       local target_compat = content:match("targetCompatibility%s*=%s*JavaVersion%.VERSION_(%d+)")
       if target_compat then
         return target_compat
       end
 
-      -- Check gradle.properties for kotlin.jvm.target=XX
       if filepath:match("gradle%.properties$") then
         local kotlin_target = content:match("kotlin%.jvm%.target%s*=%s*(%d+)")
         if kotlin_target then
@@ -376,33 +317,19 @@ function M.detect_jvm_target(project_root)
   return nil
 end
 
----Get JVM target version for Gradle projects
----Uses auto-detection first, then env var, then default
----Works for all Gradle projects (Android, Ktor, pure Kotlin, etc.)
----@param project_root string|nil Optional project root path
----@return string jvm_target
 function M.get_jvm_target(project_root)
-  -- Try auto-detection first
   local detected = M.detect_jvm_target(project_root)
   if detected then
     return detected
   end
 
-  -- Fall back to env var or default
   return vim.env.GRADLE_JVM_TARGET or vim.env.ANDROID_KLS_JVM_TARGET or "17"
 end
 
 -- ============================================================================
--- GRADLE CLASSPATH EXTRACTION - HYBRID AUTO-DETECTION
+-- GRADLE CLASSPATH EXTRACTION (for manual use, NOT for LSP injection)
 -- ============================================================================
 
----Try a specific gradle configuration
----@param project_root string
----@param module string Module prefix like "app:" or ""
----@param configuration string Config name like "debugCompileClasspath"
----@param timeout number Timeout in ms
----@param extra_classpath string[]|nil Extra paths to include (e.g., android.jar)
----@param callback fun(success: boolean, classpath: string[]|nil)
 function M.try_gradle_config(project_root, module, configuration, timeout, extra_classpath, callback)
   local gradlew = project_root .. "/gradlew"
   local cmd = {
@@ -440,10 +367,6 @@ function M.try_gradle_config(project_root, module, configuration, timeout, extra
   end)
 end
 
----Extract classpath using hybrid auto-detection
----@param project_root string
----@param extra_classpath string[]|nil Extra paths to include (e.g., android.jar)
----@param callback fun(classpath: string[]|nil, error: string|nil)
 function M.extract_classpath_async(project_root, extra_classpath, callback)
   local gradlew = project_root .. "/gradlew"
 
@@ -454,7 +377,6 @@ function M.extract_classpath_async(project_root, extra_classpath, callback)
 
   log("Syncing gradle dependencies...", "minimal")
 
-  -- PHASE 1: Try cached config first
   local cached = M.get_cached_gradle_config(project_root)
   if cached then
     log("Using cached config: " .. cached.module .. cached.configuration, "verbose")
@@ -464,24 +386,18 @@ function M.extract_classpath_async(project_root, extra_classpath, callback)
         callback(classpath, nil)
         return
       end
-      -- Cached config failed, continue to fast path
       M.run_fast_path(project_root, extra_classpath, callback)
     end)
     return
   end
 
-  -- PHASE 2: Run fast path
   M.run_fast_path(project_root, extra_classpath, callback)
 end
 
----Run fast path detection
----@param project_root string
----@param extra_classpath string[]|nil Extra paths to include
----@param callback fun(classpath: string[]|nil, error: string|nil)
 function M.run_fast_path(project_root, extra_classpath, callback)
   local modules = M.detect_modules(project_root)
   if #modules == 0 then
-    table.insert(modules, "") -- Root project
+    table.insert(modules, "")
   end
 
   local all_classpaths = {}
@@ -498,22 +414,18 @@ function M.run_fast_path(project_root, extra_classpath, callback)
           attempted = attempted + 1
 
           if success and classpath then
-            -- Merge into all_classpaths
             for _, jar in ipairs(classpath) do
               table.insert(all_classpaths, jar)
             end
 
-            -- Save first successful config
             if not success_found then
               success_found = true
               M.save_gradle_config(project_root, module, config)
             end
           end
 
-          -- Check if all attempts complete
           if attempted >= total_attempts then
             if #all_classpaths > 0 then
-              -- Deduplicate
               local seen = {}
               local unique = {}
               for _, jar in ipairs(all_classpaths) do
@@ -527,7 +439,6 @@ function M.run_fast_path(project_root, extra_classpath, callback)
               log("Found " .. #unique .. " unique dependencies", "minimal")
               callback(unique, nil)
             else
-              -- PHASE 3: Deep discovery
               log("Phase 2: Deep discovery...", "medium")
               M.run_deep_discovery(project_root, extra_classpath, callback)
             end
@@ -538,14 +449,11 @@ function M.run_fast_path(project_root, extra_classpath, callback)
   end
 end
 
----List all available configurations from gradle
----@param project_root string
----@param callback fun(configs: table[]|nil)
 function M.list_all_configurations(project_root, callback)
   local gradlew = project_root .. "/gradlew"
   local modules = M.detect_modules(project_root)
   if #modules == 0 then
-    table.insert(modules, "") -- Root project
+    table.insert(modules, "")
   end
 
   local all_configs = {}
@@ -562,7 +470,6 @@ function M.list_all_configurations(project_root, callback)
 
       if result.code == 0 then
         local output = result.stdout or ""
-        -- Parse configuration names from output
         for line in output:gmatch("[^\r\n]+") do
           local config = line:match("^(%w+[%w]*) %- ")
           if config and not all_configs[config] then
@@ -584,10 +491,6 @@ function M.list_all_configurations(project_root, callback)
   end
 end
 
----Run deep discovery (fallback)
----@param project_root string
----@param extra_classpath string[]|nil Extra paths to include
----@param callback fun(classpath: string[]|nil, error: string|nil)
 function M.run_deep_discovery(project_root, extra_classpath, callback)
   M.list_all_configurations(project_root, function(configs)
     if not configs or #configs == 0 then
@@ -613,7 +516,6 @@ function M.run_deep_discovery(project_root, extra_classpath, callback)
         if pending == 0 then
           vim.schedule(function()
             if #all_classpaths > 0 then
-              -- Deduplicate
               local seen = {}
               local unique = {}
               for _, jar in ipairs(all_classpaths) do
@@ -640,16 +542,10 @@ end
 -- PARSE DEPENDENCIES
 -- ============================================================================
 
----Parse gradle dependencies output to extract jar paths
----@param output string
----@param project_root string
----@param extra_classpath string[]|nil Extra paths to include (e.g., android.jar)
----@return string[] classpath_entries
 function M.parse_dependencies_output(output, project_root, extra_classpath)
   local entries = {}
   local seen = {}
 
-  -- Add extra classpath entries (pre-computed, e.g., android.jar)
   if extra_classpath then
     for _, path in ipairs(extra_classpath) do
       table.insert(entries, path)
@@ -657,25 +553,16 @@ function M.parse_dependencies_output(output, project_root, extra_classpath)
     end
   end
 
-  -- Parse gradle output lines
   for line in output:gmatch("[^\r\n]+") do
     local group, artifact, version
 
-    -- Pattern to match gradle dependency tree lines:
-    -- Examples: "+--- group:artifact:version" or "|    +--- group:artifact:version"
-    -- The [%s|]* matches optional leading spaces and tree connectors
-    -- The %+%-%-%- matches "+---" (escaped + and -)
-
-    -- Try standard format: +--- group:artifact:version
     group, artifact, version = line:match("^[%s|]*%+%-%-%-%s+([^:]+):([^:]+):([^%s]+)")
 
-    -- If not found, try version override format: +--- group:artifact -> resolved_version
     if not version then
       group, artifact, version = line:match("^[%s|]*%+%-%-%-%s+([^:]+):([^:]+)%s*%-%>%s*([^%s]+)")
     end
 
     if group and artifact and version then
-      -- Remove trailing markers like (*) or (c)
       version = version:gsub("%s*%([%a*]+%)$", "")
 
       local jar_path = M.find_gradle_cached_jar(group, artifact, version)
@@ -686,7 +573,6 @@ function M.parse_dependencies_output(output, project_root, extra_classpath)
     end
   end
 
-  -- Also try to get project-local dependencies from build directories
   local local_jars = M.find_local_project_jars(project_root)
   for _, jar in ipairs(local_jars) do
     if not seen[jar] then
@@ -698,17 +584,7 @@ function M.parse_dependencies_output(output, project_root, extra_classpath)
   return entries
 end
 
----Find a jar in gradle cache (sync version - use outside async contexts)
----@param group string
----@param artifact string
----@param version string
----@return string|nil
 function M.find_gradle_cached_jar(group, artifact, version)
-  -- Gradle cache uses group name with dots (NOT slashes) as directory
-  -- e.g., ~/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlin/kotlin-stdlib/2.3.0/
-  -- For Kotlin Multiplatform: may have -jvm suffix on artifact name
-  -- e.g., io.ktor/ktor-client-core-jvm/2.3.12/
-  
   local artifacts_to_try = { artifact, artifact .. "-jvm", artifact .. "-android" }
 
   for _, gradle_cache in ipairs(GRADLE_CACHE_PATHS) do
@@ -761,9 +637,6 @@ function M.find_gradle_cached_jar(group, artifact, version)
   return nil
 end
 
----Find local project jars from build directories
----@param project_root string
----@return string[]
 function M.find_local_project_jars(project_root)
   local jars = {}
 
@@ -787,15 +660,11 @@ function M.find_local_project_jars(project_root)
 end
 
 -- ============================================================================
--- SYNC MANAGEMENT
+-- SYNC MANAGEMENT (for manual commands, NOT for LSP injection)
 -- ============================================================================
 
 M._sync_in_progress = {}
 
----Sync gradle dependencies for a project
----@param project_root string
----@param extra_classpath string[]|nil Extra paths to include
----@param callback fun(success: boolean, classpath: string[]|nil, error: string|nil)
 function M.sync_project(project_root, extra_classpath, callback)
   if M._sync_in_progress[project_root] then
     log("Gradle sync already in progress...", "medium", vim.log.levels.WARN)
@@ -804,12 +673,10 @@ function M.sync_project(project_root, extra_classpath, callback)
 
   M._sync_in_progress[project_root] = true
 
-  -- Check cache first
   local cached = M.load_cached_classpath(project_root)
   if cached and cached.classpath then
     M._sync_in_progress[project_root] = nil
     log("Using cached classpath", "verbose")
-    -- Merge extra_classpath with cached classpath (with deduplication)
     local seen = {}
     local merged = {}
     for _, path in ipairs(cached.classpath) do
@@ -830,7 +697,6 @@ function M.sync_project(project_root, extra_classpath, callback)
     return
   end
 
-  -- Run gradle sync
   M.extract_classpath_async(project_root, extra_classpath, function(classpath, error)
     M._sync_in_progress[project_root] = nil
 
@@ -848,12 +714,7 @@ function M.sync_project(project_root, extra_classpath, callback)
   end)
 end
 
----Force sync (ignore cache)
----@param project_root string
----@param extra_classpath string[]|nil Extra paths to include
----@param callback fun(success: boolean, classpath: string[]|nil, error: string|nil)
 function M.force_sync(project_root, extra_classpath, callback)
-  -- Clear all caches
   local cache_file = M.get_cache_file(project_root)
   if vim.fn.filereadable(cache_file) == 1 then
     vim.fn.delete(cache_file)
@@ -866,87 +727,16 @@ function M.force_sync(project_root, extra_classpath, callback)
   M.sync_project(project_root, extra_classpath, callback)
 end
 
----Get or sync classpath for LSP
----@param project_root string
----@param extra_classpath string[]|nil Extra paths to include
----@param callback fun(classpath: string|nil)
-function M.get_classpath_for_lsp(project_root, extra_classpath, callback)
-  if not project_root then
-    callback(nil)
-    return
-  end
-
-  M.sync_project(project_root, extra_classpath, function(success, classpath, error)
-    if success and classpath then
-      -- macOS and Linux use ':' as classpath separator
-      local classpath_str = table.concat(classpath, ":")
-      callback(classpath_str)
-    else
-      log("Failed to get classpath: " .. (error or "unknown error"), "minimal", vim.log.levels.WARN)
-      callback(nil)
-    end
-  end)
-end
-
----Send classpath to Kotlin LSP after sync
----@param project_root string|nil Optional project root (defaults to current buffer)
-function M.send_classpath_to_lsp(project_root)
-  project_root = project_root or M.find_project_root(vim.fn.expand("%:p"))
-  if not project_root then
-    return
-  end
-
-  local clients = vim.lsp.get_clients({ name = "kotlin_language_server" })
-  if #clients == 0 then
-    log("No Kotlin LSP client found", "medium", vim.log.levels.WARN)
-    return
-  end
-
-  local client = clients[1]
-  local cached = M.load_cached_classpath(project_root)
-
-  if cached and cached.classpath then
-    local classpath = vim.list_extend({}, cached.classpath)
-    
-    -- Add android.jar for Android projects
-    local android = require("utils.android")
-    if android.is_android_project(project_root) then
-      local sdk_path = android.get_sdk_path()
-      if sdk_path then
-        local android_jar = android.find_android_jar(sdk_path)
-        if android_jar then
-          table.insert(classpath, 1, android_jar)
-        end
-      end
-    end
-
-    local classpath_str = table.concat(classpath, ":")
-    client:notify("workspace/didChangeConfiguration", {
-      settings = {
-        kotlin = {
-          compiler = {
-            classpath = classpath_str,
-          },
-        },
-      },
-    })
-    log("Sent " .. #classpath .. " dependencies to LSP (including android.jar for Android projects)", "minimal")
-  end
-end
-
 -- ============================================================================
 -- COMMANDS AND KEYMAPS
 -- ============================================================================
 
 function M.setup()
-  -- Create commands
   vim.api.nvim_create_user_command("GradleSync", function()
     local project_root = M.find_project_root(vim.fn.expand("%:p")) or vim.fn.getcwd()
     M.sync_project(project_root, nil, function(success, classpath, error)
       if success then
-        log("Gradle sync complete! " .. #classpath .. " dependencies loaded", "minimal")
-        -- Send classpath to LSP
-        M.send_classpath_to_lsp(project_root)
+        log("Gradle sync complete! " .. #classpath .. " dependencies cached", "minimal")
       else
         log("Gradle sync failed: " .. (error or "unknown error"), "minimal", vim.log.levels.ERROR)
       end
@@ -957,9 +747,7 @@ function M.setup()
     local project_root = M.find_project_root(vim.fn.expand("%:p")) or vim.fn.getcwd()
     M.force_sync(project_root, nil, function(success, classpath, error)
       if success then
-        log("Gradle force sync complete! " .. #classpath .. " dependencies loaded", "minimal")
-        -- Send classpath to LSP
-        M.send_classpath_to_lsp(project_root)
+        log("Gradle force sync complete! " .. #classpath .. " dependencies cached", "minimal")
       else
         log("Gradle sync failed: " .. (error or "unknown error"), "minimal", vim.log.levels.ERROR)
       end
@@ -970,7 +758,6 @@ function M.setup()
     desc = "Clear all cached gradle classpaths",
   })
 
-  -- Keymaps for all Gradle projects
   vim.api.nvim_create_autocmd("FileType", {
     pattern = { "kotlin", "java", "groovy" },
     callback = function()
@@ -979,7 +766,6 @@ function M.setup()
         return
       end
 
-      -- Check if this is any Gradle project
       local has_gradle = vim.fn.filereadable(project_root .. "/build.gradle") == 1 or
                          vim.fn.filereadable(project_root .. "/build.gradle.kts") == 1 or
                          vim.fn.filereadable(project_root .. "/settings.gradle") == 1 or
@@ -996,7 +782,6 @@ function M.setup()
     end,
   })
 
-  -- Auto-sync on gradle file save (works for all Gradle projects)
   vim.api.nvim_create_autocmd("BufWritePost", {
     pattern = { "*.gradle", "*.gradle.kts" },
     callback = function()
@@ -1005,7 +790,6 @@ function M.setup()
         return
       end
 
-      -- Check if this is any Gradle project
       local has_gradle = vim.fn.filereadable(project_root .. "/build.gradle") == 1 or
                          vim.fn.filereadable(project_root .. "/build.gradle.kts") == 1 or
                          vim.fn.filereadable(project_root .. "/settings.gradle") == 1 or
