@@ -1,0 +1,30 @@
+# macOS
+.DS_Store
+
+# Backup files
+*~
+*.backup
+*.bak
+lazy-lock.json.backup
+
+# Neovim
+Session.vim
+*.un~
+.netrwhist
+
+# ZSH
+.zsh_history
+.zcompdump*
+.zsh_sessions/
+
+# Logs
+*.log
+
+# Temporary files
+tmp/
+temp/
+
+# LazyVim upstream files (not our customizations)
+.config/nvim/LICENSE
+.config/nvim/README.md
+.config/nvim/lua/plugins/example.lua
