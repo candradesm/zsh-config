@@ -92,25 +92,32 @@ return {
               or gradle.get_jvm_target(root_dir)
               or "17"
 
-            -- Start LSP with full config
-            vim.lsp.start({
-              name = "kotlin_language_server",
-              cmd = { "kotlin-language-server" },
-              root_dir = root_dir,
-              filetypes = { "kotlin" },
-              init_options = {
-                storagePath = vim.fn.resolve(vim.fn.stdpath("cache") .. "/kotlin_language_server"),
-              },
-              settings = {
-                kotlin = {
-                  compiler = {
-                    jvm = {
-                      target = jvm_target,
-                    },
-                  },
-                },
-              },
-            })
+-- Start LSP with full config
+             local client_id = vim.lsp.start({
+               name = "kotlin_language_server",
+               cmd = { "kotlin-language-server" },
+               root_dir = root_dir,
+               filetypes = { "kotlin" },
+               init_options = {
+                 storagePath = vim.fn.resolve(vim.fn.stdpath("cache") .. "/kotlin_language_server"),
+               },
+               settings = {
+                 kotlin = {
+                   compiler = {
+                     jvm = {
+                       target = jvm_target,
+                     },
+                   },
+                 },
+               },
+             })
+
+             -- Send classpath immediately after LSP starts
+             if client_id then
+               vim.defer_fn(function()
+                 gradle.send_classpath_to_lsp(root_dir)
+               end, 500)
+             end
           end, 100)
         end,
       })

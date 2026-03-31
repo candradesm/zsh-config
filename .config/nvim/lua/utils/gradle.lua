@@ -706,58 +706,54 @@ end
 function M.find_gradle_cached_jar(group, artifact, version)
   -- Gradle cache uses group name with dots (NOT slashes) as directory
   -- e.g., ~/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlin/kotlin-stdlib/2.3.0/
+  -- For Kotlin Multiplatform: may have -jvm suffix on artifact name
+  -- e.g., io.ktor/ktor-client-core-jvm/2.3.12/
+  
+  local artifacts_to_try = { artifact, artifact .. "-jvm", artifact .. "-android" }
 
-  -- Try each pre-computed gradle cache path
   for _, gradle_cache in ipairs(GRADLE_CACHE_PATHS) do
-    local artifact_dir = gradle_cache .. "/" .. group .. "/" .. artifact .. "/" .. version
+    for _, artifact_name in ipairs(artifacts_to_try) do
+      local artifact_dir = gradle_cache .. "/" .. group .. "/" .. artifact_name .. "/" .. version
 
-    -- Use uv.fs_scandir instead of vim.fn.glob for async safety
-    local fd, err = vim.uv.fs_scandir(artifact_dir)
-    if fd then
-      local jars = {}
-      while true do
-        local name, type = vim.uv.fs_scandir_next(fd)
-        if not name then break end
-        if type == "directory" then
-          -- Check subdirectory for jar files
-          local subdir = artifact_dir .. "/" .. name
-          local subfd = vim.uv.fs_scandir(subdir)
-          if subfd then
-            while true do
-              local subname, subtype = vim.uv.fs_scandir_next(subfd)
-              if not subname then break end
-              if subtype == "file" and subname:match("%.jar$") then
-                table.insert(jars, subdir .. "/" .. subname)
+      local fd = vim.uv.fs_scandir(artifact_dir)
+      if fd then
+        local jars = {}
+        while true do
+          local name, type = vim.uv.fs_scandir_next(fd)
+          if not name then break end
+          if type == "directory" then
+            local subdir = artifact_dir .. "/" .. name
+            local subfd = vim.uv.fs_scandir(subdir)
+            if subfd then
+              while true do
+                local subname, subtype = vim.uv.fs_scandir_next(subfd)
+                if not subname then break end
+                if subtype == "file" and subname:match("%.jar$") then
+                  table.insert(jars, subdir .. "/" .. subname)
+                end
               end
             end
           end
         end
-      end
 
-      if #jars > 0 then
-        -- Filter out sources and javadoc jars
-        local main_jars = {}
-        for _, jar in ipairs(jars) do
-          if not jar:match("%-sources%.jar$") and not jar:match("%-javadoc%.jar$") then
-            table.insert(main_jars, jar)
-          end
-        end
-
-        -- If we have main jars, prioritize the exact artifact-version.jar
-        if #main_jars > 0 then
-          local main_jar_pattern = artifact .. "%-" .. version .. "%.jar$"
-          for _, jar in ipairs(main_jars) do
-            if jar:match(main_jar_pattern) then
-              return jar
+        if #jars > 0 then
+          local main_jars = {}
+          for _, jar in ipairs(jars) do
+            if not jar:match("%-sources%.jar$") and not jar:match("%-javadoc%.jar$") then
+              table.insert(main_jars, jar)
             end
           end
-          -- Return first main jar if exact match not found
-          return main_jars[1]
-        end
 
-        -- No main jars found (only sources/javadoc) - skip this dependency
-        -- AndroidX artifacts often only have AAR + sources, no JAR
-        return nil
+          if #main_jars > 0 then
+            local main_jar_pattern = artifact_name .. "%-" .. version .. "%.jar$"
+            for _, jar in ipairs(main_jars) do
+              if jar:match(main_jar_pattern) then
+                return jar
+              end
+            end
+            return main_jars[1]
+          end
+        end
       end
     end
   end
@@ -813,7 +809,24 @@ function M.sync_project(project_root, extra_classpath, callback)
   if cached and cached.classpath then
     M._sync_in_progress[project_root] = nil
     log("Using cached classpath", "verbose")
-    callback(true, cached.classpath, nil)
+    -- Merge extra_classpath with cached classpath (with deduplication)
+    local seen = {}
+    local merged = {}
+    for _, path in ipairs(cached.classpath) do
+      if not seen[path] then
+        seen[path] = true
+        table.insert(merged, path)
+      end
+    end
+    if extra_classpath then
+      for _, path in ipairs(extra_classpath) do
+        if not seen[path] then
+          seen[path] = true
+          table.insert(merged, path)
+        end
+      end
+    end
+    callback(true, merged, nil)
     return
   end
 
@@ -883,7 +896,6 @@ function M.send_classpath_to_lsp(project_root)
     return
   end
 
-  -- Get active Kotlin LSP client
   local clients = vim.lsp.get_clients({ name = "kotlin_language_server" })
   if #clients == 0 then
     log("No Kotlin LSP client found", "medium", vim.log.levels.WARN)
@@ -894,7 +906,21 @@ function M.send_classpath_to_lsp(project_root)
   local cached = M.load_cached_classpath(project_root)
 
   if cached and cached.classpath then
-    local classpath_str = table.concat(cached.classpath, ":")
+    local classpath = vim.list_extend({}, cached.classpath)
+    
+    -- Add android.jar for Android projects
+    local android = require("utils.android")
+    if android.is_android_project(project_root) then
+      local sdk_path = android.get_sdk_path()
+      if sdk_path then
+        local android_jar = android.find_android_jar(sdk_path)
+        if android_jar then
+          table.insert(classpath, 1, android_jar)
+        end
+      end
+    end
+
+    local classpath_str = table.concat(classpath, ":")
     client:notify("workspace/didChangeConfiguration", {
       settings = {
         kotlin = {
@@ -904,7 +930,7 @@ function M.send_classpath_to_lsp(project_root)
         },
       },
     })
-    log("Sent " .. #cached.classpath .. " dependencies to LSP", "minimal")
+    log("Sent " .. #classpath .. " dependencies to LSP (including android.jar for Android projects)", "minimal")
   end
 end
 
