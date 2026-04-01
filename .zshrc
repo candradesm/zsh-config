@@ -3,9 +3,10 @@ export PATH=$PATH:/opt/homebrew/bin:$HOME/Library/Android/sdk/platform-tools/:/o
 export PATH="$HOME/.local/bin:$PATH"
 export ZSH_CONFIG="$HOME/.zsh-config"
 
-source $ZSH_CONFIG/oh-my-zsh-config.sh
-source $ZSH_CONFIG/custom-config.sh
-source $ZSH_CONFIG/zara-custom-config.sh
-source $ZSH_CONFIG/golden-wisdom.sh
+source "$ZSH_CONFIG/oh-my-zsh-config.sh"
+source "$ZSH_CONFIG/custom-config.sh"
+source "$ZSH_CONFIG/work.sh" 2>/dev/null
+source "$ZSH_CONFIG/golden-wisdom.sh"
+source "$ZSH_CONFIG/_credentials.sh" 2>/dev/null
 
 bananza

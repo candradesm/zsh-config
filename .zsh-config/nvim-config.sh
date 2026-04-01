@@ -6,7 +6,7 @@ export ANDROID_HOME="$HOME/Library/Android/sdk"         # Alternative name
 export GRADLE_CACHE="true"                              # Enable classpath caching
 export GRADLE_JVM_TARGET="17"                           # JVM target version (auto-detected from project)
 export GRADLE_AUTO_SYNC="false"                         # Auto-sync on gradle file save
-export GRADLE_TIMEOUT="60000"                           # Gradle sync timeout in ms (default: 60000)
+export GRADLE_TIMEOUT="60000"                           # Gradle sync timeout in ms (Lua fallback when unset: 120000)
 export GRADLE_FEEDBACK="medium"                         # Feedback level: minimal, medium, verbose
 export GRADLE_CACHE_DIR="$HOME/.cache/nvim/gradle"      # Cache directory
 
