@@ -5,6 +5,7 @@ export ZSH_CONFIG="$HOME/.zsh-config"
 
 source $ZSH_CONFIG/oh-my-zsh-config.sh
 source $ZSH_CONFIG/custom-config.sh
+source $ZSH_CONFIG/nvim-config.sh
 source $ZSH_CONFIG/zara-custom-config.sh
 source $ZSH_CONFIG/golden-wisdom.sh
 
