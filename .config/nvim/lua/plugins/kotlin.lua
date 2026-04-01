@@ -35,7 +35,7 @@ return {
             kotlin = {
               compiler = {
                 jvm = {
-                  target = vim.env.GRADLE_JVM_TARGET or vim.env.ANDROID_KLS_JVM_TARGET or "17",
+                  target = vim.env.GRADLE_JVM_TARGET or "17",
                 },
               },
               linting = {

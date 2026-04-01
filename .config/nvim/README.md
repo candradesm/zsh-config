@@ -69,10 +69,7 @@ See [ANDROID_DEV_SETUP.md](ANDROID_DEV_SETUP.md) for detailed setup instructions
 Set in `~/.zsh-config/nvim-config.sh`:
 
 - `ANDROID_SDK_ROOT` — Android SDK path
-- `GRADLE_JVM_TARGET` — JVM target (auto-detected)
-- `GRADLE_AUTO_SYNC` — Auto-sync on gradle file save
-- `GRADLE_TIMEOUT` — Sync timeout (ms)
-- `GRADLE_FEEDBACK` — Verbosity level
+- `GRADLE_JVM_TARGET` — JVM target (auto-detected from project)
 
 ## Troubleshooting
 

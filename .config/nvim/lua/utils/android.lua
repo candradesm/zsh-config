@@ -175,7 +175,7 @@ end
 ---Check if caching is enabled
 ---@return boolean enabled
 function M.is_cache_enabled()
-  local cache_setting = vim.env.GRADLE_CACHE or vim.env.ANDROID_KLS_CACHE
+  local cache_setting = vim.env.GRADLE_CACHE
   if cache_setting == nil then
     return true -- default to enabled
   end

@@ -25,10 +25,6 @@ Environment variables for Neovim Gradle Development (Android, Ktor, pure Kotlin/
 | `ANDROID_HOME` | Yes* | `$HOME/Library/Android/sdk` | Alternative SDK path |
 | **Gradle Settings** |
 | `GRADLE_JVM_TARGET` | No | `17` | JVM target (auto-detected from project) |
-| `GRADLE_AUTO_SYNC` | No | `false` | Auto-sync on gradle save |
-| `GRADLE_TIMEOUT` | No | `60000` | Sync timeout (ms) |
-| `GRADLE_FEEDBACK` | No | `medium` | Verbosity: minimal/medium/verbose |
-| `GRADLE_CACHE_DIR` | No | `~/.cache/nvim/gradle` | Cache directory |
 
 \* Required only for Android projects. The kotlin-language-server handles its own Gradle sync internally.
 
