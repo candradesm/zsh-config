@@ -1,7 +1,6 @@
 # 🐵 GOLDEN BANANZAS PROPHECY - ZSH FUNCTION 🍌✨
 # Junior Monke's daily inspiration from THE PROPHECY OF GOLDEN BANANZAS
 # Usage: golden_wisdom or bananza
-# Generated entirely by Junior Monke, our AI assistant for Senior Engineers 🦍.
 
 golden_wisdom() {
   local messages=(
