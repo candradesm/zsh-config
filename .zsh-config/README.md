@@ -4,15 +4,18 @@ This directory contains modular zsh configuration files.
 
 ## Files
 
-### nvim-config
+### nvim-config.sh
+
 Environment variables for Neovim Gradle Development (Android, Ktor, pure Kotlin/Java).
 
 > ⚠️ **Platform Support:** macOS and Linux only. Windows is not supported.
 
 **Dependencies:**
+
 - `fd` (file finder): `brew install fd` - Required for file search in LazyVim
 
 **Setup:** Add to `~/.zshrc`:
+
 ```bash
 source ~/.zsh-config/nvim-config
 ```
@@ -28,42 +31,35 @@ source ~/.zsh-config/nvim-config
 | `GRADLE_CACHE` | No | `true` | Enable classpath caching |
 | `GRADLE_JVM_TARGET` | No | `17` | JVM target (auto-detected) |
 | `GRADLE_AUTO_SYNC` | No | `false` | Auto-sync on gradle save |
-| `GRADLE_TIMEOUT` | No | `60000` | Sync timeout (ms) |
+| `GRADLE_TIMEOUT` | No | `60000` | Sync timeout (ms) — Lua fallback when unset: `120000` |
 | `GRADLE_FEEDBACK` | No | `medium` | Verbosity: minimal/medium/verbose |
 | `GRADLE_CACHE_DIR` | No | `~/.cache/nvim/gradle` | Cache directory |
 
-\* Required only for Android projects
-
-**Keybindings:**
-- `<leader>Gs` - Gradle Sync
-- `<leader>Gf` - Gradle Force Sync  
-- `<leader>Gc` - Clear Gradle Cache
-
-**Commands:**
-- `:GradleSync` - Sync dependencies
-- `:GradleSyncForce` - Force re-sync
-- `:GradleClearCache` - Clear cache
-- `:AndroidInfo` - Show configuration status
-
-**Works with:**
-- ✅ Android apps
-- ✅ Ktor servers
-- ✅ Pure Kotlin projects
-- ✅ Java projects
-- ✅ Any Gradle-based project
-
-**Troubleshooting:**
-- If SDK not found: `export ANDROID_SDK_ROOT="/your/sdk/path"`
-- Clear cache: `:GradleClearCache`
-
 ### custom-config.sh
+
 General utility aliases and Java configuration.
 
 ### golden-wisdom.sh
+
 Project navigation aliases.
 
 ### oh-my-zsh-config.sh
+
 Oh-My-Zsh framework configuration.
 
-### zara-custom-config.sh
-Additional Zara-specific aliases.
+### work.sh *(gitignored — create locally)*
+
+Work-specific aliases, environment variables, and tooling. This file is listed in `.gitignore`
+and will never be committed. Create it at `~/.zsh-config/work.sh` with your own work
+environment content. It is sourced automatically from `.zshrc` with `2>/dev/null` so a
+missing file is silently ignored.
+
+**Example contents:** project navigation aliases, VPN helpers, internal SDK paths, etc.
+
+### _credentials.sh *(gitignored — create locally)*
+
+Stores credentials and secrets. This file is listed in `.gitignore` and will never be
+committed. Create it at `~/.zsh-config/_credentials.sh` and add your `export` statements
+there.
+
+**CRITICAL**: Never share this file or commit it. If any key is exposed, rotate it immediately.
