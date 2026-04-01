@@ -5,7 +5,7 @@ Complete LazyVim configuration with Android/Kotlin development support.
 ## Features
 
 - **Kotlin & Java LSP** — autocomplete, goto definition, refactoring, hover docs
-- **Android Development** — SDK detection, Gradle integration, XML layout support
+- **Android Development** — SDK detection, XML layout support
 - **Auto-formatting** — ktlint for Kotlin, google-java-format for Java (on save)
 - **Debugging** — Kotlin debugger with attach-to-process support
 - **Statusline Indicators** — shows Android/Gradle project status

@@ -88,30 +88,6 @@ function M.is_gradle_project(filepath)
   return false
 end
 
-function M.detect_modules(project_root)
-  local modules = {}
-
-  if vim.fn.isdirectory(project_root .. "/app") == 1 then
-    table.insert(modules, "app:")
-  end
-
-  local dirs = vim.fn.glob(project_root .. "/*", false, true)
-  for _, dir in ipairs(dirs) do
-    if vim.fn.isdirectory(dir) == 1 then
-      local name = vim.fn.fnamemodify(dir, ":t")
-      if name ~= ".git" and name ~= ".idea" and name ~= "build" and
-         name ~= ".gradle" and name ~= "gradle" and name ~= "app" then
-        if vim.fn.filereadable(dir .. "/build.gradle") == 1 or
-           vim.fn.filereadable(dir .. "/build.gradle.kts") == 1 then
-          table.insert(modules, name .. ":")
-        end
-      end
-    end
-  end
-
-  return modules
-end
-
 -- ============================================================================
 -- JVM TARGET DETECTION
 -- ============================================================================

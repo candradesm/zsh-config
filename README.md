@@ -14,6 +14,9 @@ A complete development environment configuration for **macOS and Linux** includi
 - `.zshrc` with modular configuration and custom functions
 - oh-my-zsh with plugins: git, timer, thefuck, autosuggestions, syntax-highlighting
 - Custom welcome messages and utility functions
+- **Local-only files** (gitignored, created by you):
+  - `work.sh` — work-specific aliases, environment variables, tooling
+  - `_credentials.sh` — secrets and credentials (NEVER commit this)
 - **See [`.zsh-config/README.md`](.zsh-config/README.md)** for detailed documentation of all configuration files
 
 ### Neovim (Full IDE)
@@ -23,9 +26,10 @@ Complete LazyVim configuration with:
   - XML support for Android layouts
   - Auto-formatting with ktlint on save
   - Debugging support (breakpoints, step-through)
-  - Gradle integration
+  - SDK detection and statusline indicators
   - Markdown with live preview
 - **Languages:** Kotlin, Java, XML, Markdown, TOML, Groovy (Gradle)
+- **Note:** kotlin-language-server (fwcd) supports Kotlin ≤ 2.2.x. For Kotlin 2.3.0+, consider switching to the official [Kotlin/kotlin-lsp](https://github.com/Kotlin/kotlin-lsp).
 
 ### AI Assistant
 - Opencode configuration with specialized agents
@@ -102,8 +106,8 @@ This config provides full IDE support for Android development with Neovim:
 - IntelliSense (autocomplete, goto definition, hover docs)
 - Auto-formatting with ktlint on save
 - Debugging (set breakpoints, step-through code)
-- Gradle task runner
 - XML layout support with syntax highlighting
+- SDK detection and statusline indicators
 
 **Quick Start:**
 1. Open any `.kt` or `.java` file in an Android project

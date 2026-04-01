@@ -89,28 +89,6 @@ After setting up, restart Neovim.
 ]]
 end
 
----Find android.jar from SDK
----@param sdk_path string
----@return string|nil
-function M.find_android_jar(sdk_path)
-  local platforms_dir = sdk_path .. "/platforms"
-  if vim.fn.isdirectory(platforms_dir) ~= 1 then
-    return nil
-  end
-
-  local platforms = vim.fn.glob(platforms_dir .. "/android-*", false, true)
-  table.sort(platforms)
-
-  for i = #platforms, 1, -1 do
-    local android_jar = platforms[i] .. "/android.jar"
-    if vim.fn.filereadable(android_jar) == 1 then
-      return android_jar
-    end
-  end
-
-  return nil
-end
-
 -- ============================================================================
 -- PROJECT DETECTION
 -- ============================================================================
