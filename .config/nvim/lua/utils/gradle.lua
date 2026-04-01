@@ -15,7 +15,7 @@ local DEFAULT_CACHE_DIR = vim.fn.expand("~/.cache/nvim/gradle")
 -- ============================================================================
 
 function M.get_cache_dir()
-  local custom_cache = vim.env.GRADLE_CACHE_DIR or vim.env.NVIM_ANDROID_CACHE_DIR
+  local custom_cache = vim.env.GRADLE_CACHE_DIR
   if custom_cache then
     return vim.fn.expand(custom_cache)
   end
@@ -88,30 +88,6 @@ function M.is_gradle_project(filepath)
   return false
 end
 
-function M.detect_modules(project_root)
-  local modules = {}
-
-  if vim.fn.isdirectory(project_root .. "/app") == 1 then
-    table.insert(modules, "app:")
-  end
-
-  local dirs = vim.fn.glob(project_root .. "/*", false, true)
-  for _, dir in ipairs(dirs) do
-    if vim.fn.isdirectory(dir) == 1 then
-      local name = vim.fn.fnamemodify(dir, ":t")
-      if name ~= ".git" and name ~= ".idea" and name ~= "build" and
-         name ~= ".gradle" and name ~= "gradle" and name ~= "app" then
-        if vim.fn.filereadable(dir .. "/build.gradle") == 1 or
-           vim.fn.filereadable(dir .. "/build.gradle.kts") == 1 then
-          table.insert(modules, name .. ":")
-        end
-      end
-    end
-  end
-
-  return modules
-end
-
 -- ============================================================================
 -- JVM TARGET DETECTION
 -- ============================================================================
@@ -173,7 +149,7 @@ function M.get_jvm_target(project_root)
     return detected
   end
 
-  return vim.env.GRADLE_JVM_TARGET or vim.env.ANDROID_KLS_JVM_TARGET or "17"
+  return vim.env.GRADLE_JVM_TARGET or "17"
 end
 
 -- ============================================================================

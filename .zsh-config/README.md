@@ -14,11 +14,7 @@ Environment variables for Neovim Gradle Development (Android, Ktor, pure Kotlin/
 
 - `fd` (file finder): `brew install fd` - Required for file search in LazyVim
 
-**Setup:** Add to `~/.zshrc`:
-
-```bash
-source ~/.zsh-config/nvim-config
-```
+**Setup:** This file is sourced automatically from `.zshrc`. No manual setup needed.
 
 **Variables:**
 
@@ -28,12 +24,9 @@ source ~/.zsh-config/nvim-config
 | `ANDROID_SDK_ROOT` | Yes* | `$HOME/Library/Android/sdk` | Path to Android SDK |
 | `ANDROID_HOME` | Yes* | `$HOME/Library/Android/sdk` | Alternative SDK path |
 | **Gradle Settings** |
-| `GRADLE_CACHE` | No | `true` | Enable classpath caching |
-| `GRADLE_JVM_TARGET` | No | `17` | JVM target (auto-detected) |
-| `GRADLE_AUTO_SYNC` | No | `false` | Auto-sync on gradle save |
-| `GRADLE_TIMEOUT` | No | `60000` | Sync timeout (ms) — Lua fallback when unset: `120000` |
-| `GRADLE_FEEDBACK` | No | `medium` | Verbosity: minimal/medium/verbose |
-| `GRADLE_CACHE_DIR` | No | `~/.cache/nvim/gradle` | Cache directory |
+| `GRADLE_JVM_TARGET` | No | `17` | JVM target (auto-detected from project) |
+
+\* Required only for Android projects. The kotlin-language-server handles its own Gradle sync internally.
 
 ### custom-config.sh
 
@@ -41,11 +34,11 @@ General utility aliases and Java configuration.
 
 ### golden-wisdom.sh
 
-Project navigation aliases.
+Project navigation aliases and welcome message.
 
 ### oh-my-zsh-config.sh
 
-Oh-My-Zsh framework configuration.
+Oh-My-Zsh framework configuration with plugins: git, timer, thefuck, zsh-autosuggestions, zsh-syntax-highlighting.
 
 ### work.sh *(gitignored — create locally)*
 

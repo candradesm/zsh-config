@@ -5,7 +5,7 @@ Complete LazyVim configuration with Android/Kotlin development support.
 ## Features
 
 - **Kotlin & Java LSP** — autocomplete, goto definition, refactoring, hover docs
-- **Android Development** — SDK detection, Gradle integration, XML layout support
+- **Android Development** — SDK detection, XML layout support
 - **Auto-formatting** — ktlint for Kotlin, google-java-format for Java (on save)
 - **Debugging** — Kotlin debugger with attach-to-process support
 - **Statusline Indicators** — shows Android/Gradle project status
@@ -69,10 +69,7 @@ See [ANDROID_DEV_SETUP.md](ANDROID_DEV_SETUP.md) for detailed setup instructions
 Set in `~/.zsh-config/nvim-config.sh`:
 
 - `ANDROID_SDK_ROOT` — Android SDK path
-- `GRADLE_JVM_TARGET` — JVM target (auto-detected)
-- `GRADLE_AUTO_SYNC` — Auto-sync on gradle file save
-- `GRADLE_TIMEOUT` — Sync timeout (ms)
-- `GRADLE_FEEDBACK` — Verbosity level
+- `GRADLE_JVM_TARGET` — JVM target (auto-detected from project)
 
 ## Troubleshooting
 
