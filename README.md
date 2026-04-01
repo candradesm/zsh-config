@@ -2,7 +2,8 @@
 
 A complete development environment configuration for **macOS and Linux** including:
 
-> ⚠️ **Not supported:** Windows (use WSL2 if you must)
+> [!WARNING]
+> **Not supported:** Windows (use WSL2 if you must)
 - ZSH shell with oh-my-zsh and custom plugins
 - Neovim with LazyVim and Android development support
 - Opencode AI assistant configuration

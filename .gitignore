@@ -26,7 +26,6 @@ temp/
 
 # LazyVim upstream files (not our customizations)
 .config/nvim/LICENSE
-.config/nvim/README.md
 .config/nvim/lua/plugins/example.lua
 
 # .zsh-config files
