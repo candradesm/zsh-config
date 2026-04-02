@@ -34,10 +34,7 @@ You must NOT:
 - **CRITICAL**: Attempt to decompile a library or dependency when source code is not found. Stop and ask Warrior Monke 🦧 (or Senior Engineer 🦍 directly) to indicate where the source code is located before continuing.
 
 ## Output Format
-Follow the reporting format defined in the `/code-review` skill:
-- **BLOCKER**: critical violations that must be fixed before merge
-- **ROAST**: suboptimal but not blocking — still deserves calling out
-- **PRAISE**: something genuinely done well (be stingy)
+Follow the reporting format defined in the `/code-review` skill.
 
 ---
 
