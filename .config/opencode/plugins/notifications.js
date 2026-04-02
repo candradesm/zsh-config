@@ -1,7 +1,7 @@
 /**
  * OpenCode Notifications Plugin
  *
- * Sends macOS system notifications for key session events:
+ * Sends system notifications for key session events:
  *   1. session.idle                          → "Task completed!"
  *   2. session.error                         → "Something went wrong, I need your attention!"
  *   3. permission.asked / permission.updated → "I need permission to do: <summary>"
@@ -10,32 +10,69 @@
  * Notifications are suppressed when your terminal app is in focus — no noise
  * when you're already looking at the screen.
  *
- * Configuration: copy notifications.config.example.jsonc → notifications.config.jsonc
- * (gitignored) and edit to taste. All fields are optional; missing keys fall back
- * to the hardcoded defaults below.
+ * Configuration: edit notifications.config.jsonc to taste. All fields are optional;
+ * missing keys fall back to the hardcoded defaults below.
  *
  * Auto-loaded by OpenCode from .opencode/plugins/ (project-level).
  * For global use, copy both files to ~/.config/opencode/plugins/ instead.
+ *
+ * Platform support: macOS (full), Linux (notifications + sound + X11 focus).
+ * Windows is explicitly unsupported.
  */
+
+import os from "node:os"
+import fs from "node:fs"
 
 export const NotificationsPlugin = async ({ $ }) => {
 
+  // ── Platform detection ─────────────────────────────────────────────────────
+  const PLATFORM = process.platform
+
+  if (PLATFORM === "win32") {
+    throw new Error("[NotificationsPlugin] Windows is not supported. This plugin requires macOS or Linux.")
+  }
+
+  const isSupported = PLATFORM === "darwin" || PLATFORM === "linux"
+  const isMacOS = PLATFORM === "darwin"
+  const isLinux = PLATFORM === "linux"
+
+  // ── Shared utilities ────────────────────────────────────────────────────────
+  const safe = (s) =>
+    String(s)
+      .replace(/\\/g, "\\\\")
+      .replace(/"/g, '\\"')
+      .replace(/\n/g, "\\n")
+      .replace(/\r/g, "\\r")
+
+  const extractFilename = (path) =>
+    path ? path.split("/").filter(Boolean).pop() : ""
+
+  const runCommand = async (args, options = {}) => {
+    const proc = Bun.spawn(args, { stdout: "pipe", stderr: "pipe", ...options })
+    await proc.exited
+    return proc.exitCode === 0
+      ? (await new Response(proc.stdout).text()).trim()
+      : null
+  }
+
   // ── JSONC parser ─────────────────────────────────────────────────────────────
-  // Strips comments and trailing commas before handing off to JSON.parse.
-  // The alternation matches string literals first so that "//" inside a value
-  // (e.g. a URL like "https://...") is never treated as a comment.
-  const parseJsonc = (text) => JSON.parse(
-    text
-      .replace(
-        /("(?:[^"\\]|\\.)*")|\/\/[^\n\r]*|\/\*[\s\S]*?\*\//g,
-        (match, str) => str ?? ""   // keep string literals; erase comments
+  const parseJsonc = (text) => {
+    try {
+      return JSON.parse(
+        text
+          .replace(
+            /("(?:[^"\\]|\\.)*")|\/\/[^\n\r]*|\/\*[\s\S]*?\*\//g,
+            (match, str) => str ?? ""
+          )
+          .replace(/,(\s*[}\]])/g, "$1")
       )
-      .replace(/,(\s*[}\]])/g, "$1")  // trailing commas
-  )
+    } catch (err) {
+      console.warn(`[NotificationsPlugin] Failed to parse config, using defaults: ${err.message}`)
+      return {}
+    }
+  }
 
   // ── Deep merge ───────────────────────────────────────────────────────────────
-  // Recursively merges `source` into `target`. Arrays and primitives in source
-  // replace those in target; plain objects are merged recursively.
   const deepMerge = (target, source) => {
     const result = { ...target }
     for (const key of Object.keys(source)) {
@@ -54,42 +91,31 @@ export const NotificationsPlugin = async ({ $ }) => {
 
   // ── Defaults ─────────────────────────────────────────────────────────────────
   const DEFAULTS = {
-    // macOS process name of the terminal running OpenCode.
-    // null = auto-detected; set a string to override (e.g. "Ghostty").
     terminalProcessName: null,
-
-    // Master sound toggle.
     soundEnabled: true,
-
-    // Per-event enable/disable.
     events: {
       idle:       true,
       error:      true,
       permission: true,
       question:   true,
     },
-
-    // Per-event sound (stem of /System/Library/Sounds/<name>.aiff).
     sounds: {
       idle:       "Glass",
       error:      "Basso",
       permission: "Submarine",
       question:   "Submarine",
     },
-
-    // Per-event notification messages.
-    // In "permission", {summary} is replaced with a short description of the tool action.
     messages: {
       idle:       "Task completed!",
       error:      "Something went wrong, I need your attention!",
       permission: "I need permission to do: {summary}",
       question:   "I have a question for you!",
     },
+    dedupeWindowMs: 1500,
+    maxRecentNotifications: 100,
   }
 
   // ── Load user config ─────────────────────────────────────────────────────────
-  // Resolve config path relative to this plugin file so it works regardless of
-  // the working directory OpenCode is launched from.
   const configPath = new URL("./notifications.config.jsonc", import.meta.url).pathname
   const configFile = Bun.file(configPath)
   const userOverrides = (await configFile.exists())
@@ -97,10 +123,21 @@ export const NotificationsPlugin = async ({ $ }) => {
     : {}
   const CONFIG = deepMerge(DEFAULTS, userOverrides)
 
+  // ── Debug logger ─────────────────────────────────────────────────────────
+  const DEBUG = false
+  const logPath = `${os.tmpdir()}/opencode-notify.log`
+  const log = (...args) => {
+    if (!DEBUG) return
+    try {
+      const line = `[${new Date().toISOString()}] ${args.join(" ")}\n`
+      fs.appendFileSync(logPath, line)
+    } catch (err) {
+      if (DEBUG) console.error(`[NotificationsPlugin] Log write failed: ${err.message}`)
+    }
+  }
+
   // ── Terminal process name detection ──────────────────────────────────────────
-  // Maps $TERM_PROGRAM values (lowercased) to macOS process names.
-  // Source: https://github.com/kdcokenny/opencode-notify
-  const TERMINAL_PROCESS_NAMES = {
+  const MACOS_TERMINAL_PROCESS_NAMES = {
     ghostty:           "Ghostty",
     kitty:             "kitty",
     iterm:             "iTerm2",
@@ -115,34 +152,44 @@ export const NotificationsPlugin = async ({ $ }) => {
     "vscode-insiders": "Code - Insiders",
   }
 
-  /**
-   * Returns the macOS process name of the terminal running OpenCode, or null.
-   *
-   * Detection order:
-   *   1. Manual override from config (terminalProcessName field)
-   *   2. $TERM_PROGRAM env var → TERMINAL_PROCESS_NAMES lookup
-   *   3. Walk the parent process tree via `ps` until a known name is found
-   */
+  const LINUX_TERMINAL_PROCESS_NAMES = {
+    ghostty:           "ghostty",
+    kitty:             "kitty",
+    iterm:             null,
+    iterm2:            null,
+    wezterm:           "wezterm-gui",
+    alacritty:         "alacritty",
+    terminal:          null,
+    apple_terminal:    null,
+    hyper:             "hyper",
+    warp:              null,
+    vscode:            "code",
+    "vscode-insiders": "code-insiders",
+  }
+
   const detectTerminalProcessName = async () => {
-    // 1. Manual config override
     if (CONFIG.terminalProcessName) return CONFIG.terminalProcessName
 
-    // 2. $TERM_PROGRAM env var
     const termProgram = (process.env.TERM_PROGRAM ?? "").toLowerCase()
-    if (termProgram && TERMINAL_PROCESS_NAMES[termProgram]) {
-      return TERMINAL_PROCESS_NAMES[termProgram]
+    const nameMap = isMacOS ? MACOS_TERMINAL_PROCESS_NAMES : LINUX_TERMINAL_PROCESS_NAMES
+    if (termProgram && nameMap[termProgram]) {
+      return nameMap[termProgram]
     }
 
-    // 3. Walk parent process tree
-    const knownNames = new Set(Object.values(TERMINAL_PROCESS_NAMES))
+    if (isMacOS) {
+      return detectTerminalViaPsMacOS()
+    }
+    if (isLinux) {
+      return detectTerminalViaProcLinux()
+    }
+    return null
+  }
+
+  const detectTerminalViaPsMacOS = async () => {
+    const knownNames = new Set(Object.values(MACOS_TERMINAL_PROCESS_NAMES))
     let pid = process.ppid
     while (pid && pid > 1) {
-      const proc = Bun.spawn(["ps", "-o", "comm=,ppid=", "-p", String(pid)], {
-        stdout: "pipe",
-        stderr: "pipe",
-      })
-      await proc.exited
-      const output = (await new Response(proc.stdout).text()).trim()
+      const output = await runCommand(["ps", "-o", "comm=,ppid=", "-p", String(pid)])
       if (!output) break
       const parts = output.split(/\s+/)
       const comm  = parts[0]
@@ -151,99 +198,257 @@ export const NotificationsPlugin = async ({ $ }) => {
       if (!ppid || ppid === pid) break
       pid = ppid
     }
-
     return null
   }
 
-  // Detect once at startup; reused for every isTerminalFocused() call.
+  const detectTerminalViaProcLinux = async () => {
+    const knownNames = new Set(Object.values(LINUX_TERMINAL_PROCESS_NAMES).filter(Boolean))
+    let pid = process.ppid
+    while (pid && pid > 1) {
+      try {
+        const comm = (await Bun.file(`/proc/${pid}/comm`).text()).trim()
+        if (knownNames.has(comm)) return comm
+        const ppidStr = (await Bun.file(`/proc/${pid}/stat`).text()).split(/\s+/)[3]
+        const ppid = parseInt(ppidStr)
+        if (!ppid || ppid === pid) break
+        pid = ppid
+      } catch (err) {
+        log(`detectTerminalViaProcLinux error: ${err.message}`)
+        break
+      }
+    }
+    return null
+  }
+
   const terminalProcessName = await detectTerminalProcessName()
 
-  /**
-   * Returns true if the detected terminal is currently the frontmost macOS app.
-   * Always returns false when the terminal could not be detected (never suppresses).
-   *
-   * We ask "is <terminal> frontmost?" rather than "who is frontmost globally?"
-   * because the global query can return the terminal's name even when the user
-   * is on a different Space (no other window has focus on that Space).
-   * Querying the process directly returns false as soon as the user switches away.
-   */
+  // ── Focus detection ──────────────────────────────────────────────────────────
   const isTerminalFocused = async () => {
     if (!terminalProcessName) return false
-    const safe   = (s) => s.replace(/"/g, '\\"')
+
+    if (isMacOS) {
+      return isTerminalFocusedMacOS()
+    }
+    if (isLinux) {
+      return isTerminalFocusedLinux()
+    }
+    return false
+  }
+
+  const isTerminalFocusedMacOS = async () => {
     const script = `tell application "System Events" to return frontmost of process "${safe(terminalProcessName)}"`
-    const proc = Bun.spawn(
-      ["osascript", "-e", script],
-      { stdout: "pipe", stderr: "pipe" }
-    )
-    await proc.exited
-    // If osascript errors (e.g. process not found), default to false = allow notification.
-    if (proc.exitCode !== 0) return false
-    const result = (await new Response(proc.stdout).text()).trim()
+    const result = await runCommand(["osascript", "-e", script])
     return result === "true"
   }
 
+  const isTerminalFocusedLinux = async () => {
+    const displayServer = detectDisplayServer()
+
+    if (displayServer === "x11") {
+      return isTerminalFocusedX11()
+    }
+    if (displayServer === "wayland") {
+      return isTerminalFocusedWayland()
+    }
+    return false
+  }
+
+  const detectDisplayServer = () => {
+    if (process.env.XDG_SESSION_TYPE === "x11") return "x11"
+    if (process.env.XDG_SESSION_TYPE === "wayland") return "wayland"
+    if (process.env.DISPLAY) return "x11"
+    if (process.env.WAYLAND_DISPLAY) return "wayland"
+    return "unknown"
+  }
+
+  const isTerminalFocusedX11 = async () => {
+    const winId = await runCommand(["xdotool", "getactivewindow"])
+    if (!winId) return false
+
+    const xpropOutput = await runCommand(["xprop", "-id", winId, "_NET_WM_PID"])
+    if (!xpropOutput) return false
+    const match = xpropOutput.match(/=\s*(\d+)/)
+    if (!match) return false
+    const winPid = parseInt(match[1])
+
+    try {
+      const procName = (await Bun.file(`/proc/${winPid}/comm`).text()).trim()
+      return procName === terminalProcessName
+    } catch (err) {
+      log(`isTerminalFocusedX11 error: ${err.message}`)
+      return false
+    }
+  }
+
+  const isTerminalFocusedWayland = async () => {
+    const focused = await getFocusedWindowWayland()
+    if (!focused) return false
+    return focused === terminalProcessName
+  }
+
+  const getFocusedWindowWayland = async () => {
+    if (process.env.XDG_CURRENT_DESKTOP?.includes("GNOME")) {
+      return getFocusedWindowGnome()
+    }
+    if (process.env.XDG_CURRENT_DESKTOP?.includes("KDE")) {
+      return getFocusedWindowKde()
+    }
+    return null
+  }
+
+  const getFocusedWindowGnome = async () => {
+    const output = await runCommand([
+      "busctl", "--user", "call",
+      "org.gnome.Shell",
+      "/org/gnome/Shell",
+      "org.gnome.Shell.Eval",
+      "s", "global.display.get_focus_actor()?.get_first_child()?.get_meta('x11-display') || ''"
+    ])
+    if (!output) return null
+    const match = output.match(/"(.*)"/)
+    return match ? match[1] : null
+  }
+
+  const getFocusedWindowKde = async () => {
+    const output = await runCommand([
+      "qdbus", "org.kde.KWin", "/KWin", "org.kde.KWin.activeWindowCaption"
+    ])
+    return output || null
+  }
+
+  // ── Sound file validation ────────────────────────────────────────────────────
+  const FALLBACK_SOUNDS = {
+    darwin: "Glass",
+    linux:  "complete",
+  }
+
+  const soundPaths = {
+    darwin: (name) => `/System/Library/Sounds/${name}.aiff`,
+    linux:  (name) => `/usr/share/sounds/freedesktop/stereo/${name}.oga`,
+  }
+
+  const getSoundPath = (name) => {
+    const resolver = soundPaths[PLATFORM]
+    return resolver ? resolver(name) : null
+  }
+
+  const soundFileExists = async (name) => {
+    const path = getSoundPath(name)
+    if (!path) return false
+    try {
+      return await Bun.file(path).exists()
+    } catch (err) {
+      log(`soundFileExists error: ${err.message}`)
+      return false
+    }
+  }
+
+  const validatedSoundName = async (name) => {
+    if (await soundFileExists(name)) return name
+
+    const fallback = FALLBACK_SOUNDS[PLATFORM]
+    if (fallback && await soundFileExists(fallback)) {
+      console.warn(`[NotificationsPlugin] Sound "${name}" not found, using fallback: ${fallback}`)
+      return fallback
+    }
+
+    console.warn(`[NotificationsPlugin] Sound "${name}" not found and no fallback available, disabling sound`)
+    return null
+  }
+
+  // ── Notification backend ─────────────────────────────────────────────────────
+  const notifyMacOS = async (message, title, sound) => {
+    const script = `display notification "${safe(message)}" with title "${safe(title)}"`
+
+    const tasks = [
+      (async () => {
+        await runCommand(["osascript", "-e", script])
+      })(),
+    ]
+
+    if (CONFIG.soundEnabled) {
+      const soundName = await validatedSoundName(sound)
+      if (soundName) {
+        const soundPath = getSoundPath(soundName)
+        tasks.push(
+          (async () => {
+            await runCommand(["afplay", soundPath])
+          })()
+        )
+      }
+    }
+
+    await Promise.all(tasks)
+  }
+
+  const notifyLinux = async (message, title, sound) => {
+    const tasks = [
+      runCommand(["notify-send", title, message]),
+    ]
+
+    if (CONFIG.soundEnabled) {
+      const soundName = await validatedSoundName(sound)
+      if (soundName) {
+        const soundPath = getSoundPath(soundName)
+        if (soundPath) {
+          tasks.push(
+            (async () => {
+              await runCommand(["paplay", soundPath])
+            })()
+          )
+        }
+      }
+    }
+
+    await Promise.all(tasks)
+  }
+
+  const notify = async (message, title = "OpenCode", sound = "Glass") => {
+    if (!isSupported) return
+
+    if (isMacOS) {
+      await notifyMacOS(message, title, sound)
+    } else if (isLinux) {
+      await notifyLinux(message, title, sound)
+    }
+  }
+
   // ── Deduplication ─────────────────────────────────────────────────────────
-  // Prevents double notifications when multiple events fire for the same action
-  // (e.g. permission.asked + permission.updated for the same request).
-  const DEDUPE_WINDOW_MS = 1500
-  /** @type {Map<string, number>} key → timestamp of last notification sent */
   const recentNotifications = new Map()
 
   const shouldNotify = (key) => {
     const now = Date.now()
+    const windowMs = CONFIG.dedupeWindowMs
+    const maxEntries = CONFIG.maxRecentNotifications
+    const expiredKeys = []
     for (const [k, ts] of recentNotifications) {
-      if (now - ts >= DEDUPE_WINDOW_MS) recentNotifications.delete(k)
+      if (now - ts >= windowMs) expiredKeys.push(k)
     }
+    for (const k of expiredKeys) recentNotifications.delete(k)
+
+    if (recentNotifications.size >= maxEntries) {
+      const sorted = [...recentNotifications.entries()].sort((a, b) => a[1] - b[1])
+      const toRemove = sorted.slice(0, sorted.length - maxEntries + 1)
+      for (const [k] of toRemove) recentNotifications.delete(k)
+    }
+
     const last = recentNotifications.get(key)
-    if (last !== undefined && now - last < DEDUPE_WINDOW_MS) return false
+    if (last !== undefined && now - last < windowMs) return false
     recentNotifications.set(key, now)
     return true
   }
 
-  // ── Notification sender ───────────────────────────────────────────────────
-  /**
-   * Sends a macOS notification with optional sound — no external dependencies.
-   *
-   * osascript delivers the visual banner. afplay plays the .aiff directly
-   * (reliable, bypasses Notification Center sound settings). Both run
-   * concurrently via Promise.all — afplay must be awaited or Bun kills the
-   * child process before the clip finishes.
-   * Notification style (Banner vs Alert) is set via:
-   *   System Settings → Notifications → Script Editor
-   */
-  const notify = async (message, title = "OpenCode", sound = "Glass") => {
-    const safe   = (s) => s.replace(/"/g, '\\"')
-    const script = `display notification "${safe(message)}" with title "${safe(title)}"`
-    const tasks  = [
-      (async () => {
-        const proc = Bun.spawn(["osascript", "-e", script], { stdout: "pipe", stderr: "pipe" })
-        await proc.exited
-      })(),
-    ]
-    if (CONFIG.soundEnabled) {
-      tasks.push($`afplay /System/Library/Sounds/${sound}.aiff`.nothrow())
-    }
-    await Promise.all(tasks)
-  }
-
   // ── Permission payload parser ─────────────────────────────────────────────
-  /**
-   * Converts a permission event payload into a natural-language summary.
-   *
-   * Actual payload structure (from runtime inspection):
-   *   event.properties.permission  — e.g. "external_directory", "network", "shell"
-   *   event.properties.metadata    — { filepath?, parentDir?, url?, command?, ... }
-   *   event.properties.tool        — { messageID, callID }  ← no name here
-   */
   const toSummary = (event) => {
-    const props      = event?.properties ?? {}
+    if (!event || typeof event !== "object") return "unknown operation"
+    const props      = event.properties ?? {}
     const permission = props.permission ?? ""
     const meta       = props.metadata   ?? {}
 
     switch (permission) {
       case "external_directory": {
         const path = meta.filepath ?? meta.parentDir ?? (props.patterns ?? [])[0] ?? ""
-        const name = path ? path.split("/").filter(Boolean).pop() : ""
+        const name = extractFilename(path)
         return name ? `access: ${name}` : path ? `access: ${path}` : "access external file"
       }
       case "network": {
@@ -256,62 +461,68 @@ export const NotificationsPlugin = async ({ $ }) => {
         return tokens.length ? `run: ${tokens.join(" ")}` : "run a shell command"
       }
       default: {
-        // Generic fallback: prettify the permission type + any filepath hint
         const label = permission ? permission.replace(/_/g, " ") : "external operation"
         const path  = meta.filepath ?? meta.parentDir ?? ""
-        const name  = path ? path.split("/").filter(Boolean).pop() : ""
+        const name  = extractFilename(path)
         return name ? `${label}: ${name}` : label
       }
     }
   }
-  // ── Dedup key helper ─────────────────────────────────────────────────────
+
   const permissionKey = (event) => {
     const id = event?.properties?.id ?? event?.properties?.tool?.callID
-    return id ? `permission:${id}` : `permission:${Date.now()}`
+    return id ? `permission:${id}` : `permission:anon-${Date.now()}-${Math.random().toString(36).slice(2)}`
   }
 
-  // ── Debug logger ─────────────────────────────────────────────────────────
-  // Set DEBUG = true to write a timestamped log to /tmp/opencode-notify.log.
-  // Flip back to false once diagnosis is done.
-  const DEBUG = false
-  const logPath = "/tmp/opencode-notify.log"
-  const { appendFileSync } = await import("node:fs")
-  const log = (...args) => {
-    if (!DEBUG) return
-    try {
-      const line = `[${new Date().toISOString()}] ${args.join(" ")}\n`
-      appendFileSync(logPath, line)
-    } catch { /* ignore log errors so they never break hooks */ }
+  // ── Event handler helper ──────────────────────────────────────────────────
+  const handleNotificationEvent = async (eventType, configKey, extraLog = "") => {
+    if (!CONFIG.events[configKey]) return false
+    const focused = await isTerminalFocused()
+    log(`${eventType} | terminalProcessName=${terminalProcessName} | focused=${focused}${extraLog}`)
+    if (focused) return false
+    await notify(CONFIG.messages[configKey], "OpenCode", CONFIG.sounds[configKey])
+    return true
   }
 
-  // Startup marker — confirms the plugin loaded and terminal was detected.
-  log(`STARTUP | terminalProcessName=${terminalProcessName}`)
+  // ── Startup health check ─────────────────────────────────────────────────
+  const runHealthCheck = async () => {
+    const results = {
+      platform: PLATFORM,
+      supported: isSupported,
+      terminalDetected: !!terminalProcessName,
+      terminalProcessName,
+      configLoaded: Object.keys(userOverrides).length > 0,
+    }
+
+    if (isSupported) {
+      const idleSound = await soundFileExists(CONFIG.sounds.idle)
+      results.soundsValid = idleSound
+      if (!idleSound) {
+        console.warn(`[NotificationsPlugin] Default sound "${CONFIG.sounds.idle}" not found on this platform`)
+      }
+    }
+
+    log(`HEALTH | ${JSON.stringify(results)}`)
+    return results
+  }
+
+  await runHealthCheck()
 
   // ── Plugin hooks ──────────────────────────────────────────────────────────
   return {
     event: async ({ event }) => {
+      if (!isSupported) return
 
-      // 1. Session complete
       if (event.type === "session.idle") {
-        if (!CONFIG.events.idle) return
-        const focused = await isTerminalFocused()
-        log(`session.idle | terminalProcessName=${terminalProcessName} | focused=${focused}`)
-        if (focused) return
-        await notify(CONFIG.messages.idle, "OpenCode", CONFIG.sounds.idle)
+        await handleNotificationEvent("session.idle", "idle")
         return
       }
 
-      // 2. Session error
       if (event.type === "session.error") {
-        if (!CONFIG.events.error) return
-        const focused = await isTerminalFocused()
-        log(`session.error | terminalProcessName=${terminalProcessName} | focused=${focused}`)
-        if (focused) return
-        await notify(CONFIG.messages.error, "OpenCode", CONFIG.sounds.error)
+        await handleNotificationEvent("session.error", "error")
         return
       }
 
-      // 3. Permission needed — dedup covers asked + updated firing for same request
       if (event.type === "permission.asked" || event.type === "permission.updated") {
         if (!CONFIG.events.permission) return
         const focused = await isTerminalFocused()
@@ -325,12 +536,11 @@ export const NotificationsPlugin = async ({ $ }) => {
       }
     },
 
-    // 4. Question — handled exclusively via tool.execute.before (not question.asked)
-    // to guarantee exactly one notification; the two events fire far enough apart
-    // that dedup cannot reliably suppress the second one.
     "tool.execute.before": async (input) => {
-      log(`tool.execute.before | tool=${JSON.stringify(input?.tool)} | input keys=${Object.keys(input ?? {}).join(",")}`)
-      if ((input?.tool ?? "").toLowerCase() !== "question") return
+      if (!isSupported) return
+      const toolName = typeof input?.tool === "string" ? input.tool : ""
+      log(`tool.execute.before | tool=${JSON.stringify(toolName)} | input keys=${Object.keys(input ?? {}).join(",")}`)
+      if (toolName.toLowerCase() !== "question") return
       if (!CONFIG.events.question) return
       const focused = await isTerminalFocused()
       log(`tool.execute.before(question) | terminalProcessName=${terminalProcessName} | focused=${focused}`)

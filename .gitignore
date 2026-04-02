@@ -32,3 +32,37 @@ temp/
 
 .zsh-config/_credentials.sh
 .zsh-config/work.sh
+
+# JavaScript / Node.js
+node_modules/
+dist/
+build/
+out/
+.next/
+.nuxt/
+.cache/
+
+# Bun
+bun.lockb
+bun.lock
+.bun/
+
+# npm
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Coverage
+coverage/
+.nyc_output/
+
+# Turbo
+.turbo/
+
+# TypeScript
+*.tsbuildinfo
