@@ -1,0 +1,49 @@
+{
+  // Optional override — terminal is auto-detected by default via $TERM_PROGRAM
+  // and the parent process tree. Uncomment and set manually only if auto-detection
+  // does not work for your terminal.
+  //
+  // Find your terminal's process name: run this inside your terminal:
+  //   osascript -e 'tell application "System Events" to get name of first process whose frontmost is true'
+  //
+  // Common terminals:
+  //   "Ghostty"          Ghostty
+  //   "Terminal"         Terminal.app
+  //   "iTerm2"           iTerm2
+  //   "Alacritty"        Alacritty
+  //   "Warp"             Warp
+  //   "kitty"            kitty
+  //   "WezTerm"          WezTerm
+  //   "Code"             VS Code
+  //   "Code - Insiders"  VS Code Insiders
+  // "terminalProcessName": "Ghostty",
+
+  // Master sound toggle. Set to false to silence all notification sounds.
+  "soundEnabled": true,
+
+  // Per-event enable/disable. Set any to false to suppress that notification type.
+  "events": {
+    "idle": true,
+    "error": true,
+    "permission": true,
+    "question": true
+  },
+
+  // Per-event sound (stem of /System/Library/Sounds/<name>.aiff).
+  // Common choices: Glass, Basso, Submarine, Ping, Pop, Funk, Morse, Hero, Tink
+  "sounds": {
+    "idle": "Glass",
+    "error": "Basso",
+    "permission": "Submarine",
+    "question": "Submarine"
+  },
+
+  // Per-event notification messages.
+  // In "permission", {summary} is replaced with a short description of the requested tool action.
+  "messages": {
+    "idle": "Task completed!",
+    "error": "Something went wrong, I need your attention!",
+    "permission": "I need permission to do: {summary}",
+    "question": "I have a question for you!"
+  }
+}
