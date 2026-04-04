@@ -469,11 +469,6 @@ export const NotificationsPlugin = async ({ $ }) => {
     }
   }
 
-  const permissionKey = (event) => {
-    const id = event?.properties?.id ?? event?.properties?.tool?.callID
-    return id ? `permission:${id}` : `permission:anon-${Date.now()}-${Math.random().toString(36).slice(2)}`
-  }
-
   // ── Event handler helper ──────────────────────────────────────────────────
   const handleNotificationEvent = async (eventType, configKey, extraLog = "") => {
     if (!CONFIG.events[configKey]) return false
@@ -484,41 +479,64 @@ export const NotificationsPlugin = async ({ $ }) => {
     return true
   }
 
-  // ── Startup health check ─────────────────────────────────────────────────
-  const runHealthCheck = async () => {
-    const results = {
-      platform: PLATFORM,
-      supported: isSupported,
-      terminalDetected: !!terminalProcessName,
-      terminalProcessName,
-      configLoaded: Object.keys(userOverrides).length > 0,
-    }
-
-    if (isSupported) {
-      const idleSound = await soundFileExists(CONFIG.sounds.idle)
-      results.soundsValid = idleSound
-      if (!idleSound) {
-        console.warn(`[NotificationsPlugin] Default sound "${CONFIG.sounds.idle}" not found on this platform`)
-      }
-    }
-
-    log(`HEALTH | ${JSON.stringify(results)}`)
-    return results
-  }
-
-  await runHealthCheck()
+  // ── Subagent tracking ─────────────────────────────────────────────────────
+  // Subagents create child sessions with parentID. Track them so we can
+  // suppress "Task completed!" notifications when only a subagent finishes.
+  const subagentSessionIds = new Set()
+  const trackedSessionIds = new Map() // sessionID → { parentID, title }
 
   // ── Plugin hooks ──────────────────────────────────────────────────────────
   return {
     event: async ({ event }) => {
       if (!isSupported) return
 
+      // Log all session events for debugging
+      if (event.type.startsWith("session.")) {
+        log(`EVENT ${event.type} | props=${JSON.stringify(event.properties ?? {})}`)
+      }
+
+      // Track all sessions and their parent relationships
+      if (event.type === "session.created" || event.type === "session.updated") {
+        const info = event.properties?.info
+        const sid = event.properties?.sessionID
+        if (sid && info) {
+          trackedSessionIds.set(sid, { parentID: info.parentID, title: info.title })
+          if (info.parentID) {
+            subagentSessionIds.add(sid)
+            log(`TRACKED subagent session=${sid} parentID=${info.parentID} title=${info.title}`)
+          } else {
+            log(`TRACKED main session=${sid} title=${info.title}`)
+          }
+        }
+        return
+      }
+
       if (event.type === "session.idle") {
+        const sessionID = event.properties?.sessionID
+        const isSubagent = sessionID && subagentSessionIds.has(sessionID)
+        log(`session.idle | session=${sessionID} | isSubagent=${isSubagent} | tracked=${JSON.stringify(Object.fromEntries(trackedSessionIds))}`)
+        if (isSubagent) {
+          log(`session.idle | SKIPPED subagent notification for session=${sessionID}`)
+          subagentSessionIds.delete(sessionID)
+          trackedSessionIds.delete(sessionID)
+          return
+        }
+        log(`session.idle | SENDING main agent notification for session=${sessionID}`)
         await handleNotificationEvent("session.idle", "idle")
         return
       }
 
+      if (event.type === "session.deleted") {
+        const sessionID = event.properties?.sessionID
+        if (sessionID) {
+          subagentSessionIds.delete(sessionID)
+          trackedSessionIds.delete(sessionID)
+        }
+      }
+
       if (event.type === "session.error") {
+        const sessionID = event.properties?.sessionID
+        if (sessionID) subagentSessionIds.delete(sessionID)
         await handleNotificationEvent("session.error", "error")
         return
       }
@@ -526,9 +544,10 @@ export const NotificationsPlugin = async ({ $ }) => {
       if (event.type === "permission.asked" || event.type === "permission.updated") {
         if (!CONFIG.events.permission) return
         const focused = await isTerminalFocused()
-        log(`${event.type} | focused=${focused} | payload=${JSON.stringify(event)}`)
+        const permType = event.properties?.permission ?? "unknown"
+        log(`${event.type} | focused=${focused} | permType=${permType}`)
         if (focused) return
-        if (!shouldNotify(permissionKey(event))) return
+        if (!shouldNotify(`permission:${permType}`)) return
         const summary = toSummary(event)
         const message = CONFIG.messages.permission.replace("{summary}", summary)
         await notify(message, "OpenCode", CONFIG.sounds.permission)
