@@ -19,6 +19,7 @@ Session.vim
 
 # Logs
 *.log
+.config/opencode/plugins/logs/
 
 # Temporary files
 tmp/
