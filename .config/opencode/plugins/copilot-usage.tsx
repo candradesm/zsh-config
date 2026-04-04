@@ -9,7 +9,6 @@ const MAX_POLL_ATTEMPTS = 30
 const PLUGIN_VERSION = "v6-quota-fixed"
 
 interface CopilotConfig {
-  maxPremiumRequests: number
   modelMultipliers: Record<string, number>
 }
 
@@ -49,13 +48,6 @@ async function loadConfig(): Promise<CopilotConfig> {
     if (exists) {
       const raw = await configFile.text()
       const parsed = JSON.parse(raw) as CopilotConfig
-      const maxFromEnv = process.env.OPENCODE_COPILOT_MAX_REQUESTS
-      if (maxFromEnv) {
-        const envMax = parseFloat(maxFromEnv)
-        if (!isNaN(envMax) && envMax > 0) {
-          parsed.maxPremiumRequests = envMax
-        }
-      }
       log("loadConfig: loaded config:", JSON.stringify(parsed))
       return parsed
     }
@@ -65,7 +57,6 @@ async function loadConfig(): Promise<CopilotConfig> {
 
   log("loadConfig: using defaults")
   return {
-    maxPremiumRequests: 1500,
     modelMultipliers: {},
   }
 }
@@ -219,7 +210,7 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
   const githubToken = process.env.GITHUB_TOKEN ?? ""
   const hasToken = !!githubToken
 
-  const [config, setConfig] = createSignal<CopilotConfig>({ maxPremiumRequests: 1500, modelMultipliers: {} })
+  const [config, setConfig] = createSignal<CopilotConfig>({ modelMultipliers: {} })
   const [sessionUsage, setSessionUsage] = createSignal<number>(0)
   const [quotaInfo, setQuotaInfo] = createSignal<CopilotQuotaInfo | null>(null)
   const [quotaLoading, setQuotaLoading] = createSignal<boolean>(false)

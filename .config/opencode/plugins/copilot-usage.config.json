@@ -1,5 +1,4 @@
 {
-  "maxPremiumRequests": 1500,
   "modelMultipliers": {
     "claude-haiku-4.5": 0.33,
     "claude-opus-4.5": 3.0,
