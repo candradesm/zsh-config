@@ -32,8 +32,9 @@ Complete LazyVim configuration with:
 - **Note:** kotlin-language-server (fwcd) supports Kotlin ≤ 2.2.x. For Kotlin 2.3.0+, consider switching to the official [Kotlin/kotlin-lsp](https://github.com/Kotlin/kotlin-lsp).
 
 ### AI Assistant
-- Opencode configuration with specialized agents
-- Skills for code review, project scanning, bootstrapping
+- Opencode configuration with specialized agents and plugins
+- Skills for code review, project scanning, bootstrapping, plugin development
+- TUI plugins (Copilot usage sidebar) and server plugins (desktop notifications)
 - Automated workflows for development tasks
 
 ## Dependencies
@@ -128,10 +129,13 @@ Uncomment sections in that file to enable them.
 This repo includes a pre-configured [Opencode](https://opencode.ai/) setup with:
 
 - **Custom Agents:** Coordinator, Developer, QA, Reviewer, Testing
-- **Skills:** Automated code review, project scanning, bootstrapping
+- **Skills:** Automated code review, project scanning, bootstrapping, plugin development
+- **TUI Plugins:** Copilot usage sidebar (quota + session tracking)
+- **Server Plugins:** Desktop notifications for session events
 - **Configuration:** Ready-to-use settings for AI-assisted development
 
-See [.config/opencode/AGENTS.md](.config/opencode/AGENTS.md) for agent definitions and usage guidelines.
+See [.config/opencode/AGENTS.md](.config/opencode/AGENTS.md) for agent definitions.
+See [.config/opencode/plugins/README.md](.config/opencode/plugins/README.md) for plugin documentation.
 
 ## How it looks
 
