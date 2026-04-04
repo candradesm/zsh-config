@@ -135,7 +135,7 @@ This repo includes a pre-configured [Opencode](https://opencode.ai/) setup with:
 - **Configuration:** Ready-to-use settings for AI-assisted development
 
 See [.config/opencode/AGENTS.md](.config/opencode/AGENTS.md) for agent definitions.
-See [.config/opencode/plugins/README.md](.config/opencode/plugins/README.md) for plugin documentation.
+See [.config/opencode/README.md](.config/opencode/README.md) for plugins, skills, and full documentation.
 
 ## How it looks
 
