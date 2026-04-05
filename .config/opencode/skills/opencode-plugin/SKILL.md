@@ -1,6 +1,6 @@
 ---
 name: opencode-plugin
-description: Load when building or debugging OpenCode plugins (server or TUI). Covers plugin structure, events, state API, SolidJS UI components, config, and deployment. Contains hard-won lessons from real plugins.
+description: "CRITICAL: Load when building or debugging OpenCode plugins. Missing this = silent failures, broken hooks, and wasted hours. Covers server vs TUI plugin types, event hooks, state API, SolidJS UI slots, config loading, and deployment. Works for ANY plugin type."
 ---
 
 ## When to use me
