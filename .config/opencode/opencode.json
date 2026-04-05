@@ -48,7 +48,7 @@
       }
     },
     "developer": {
-      "description": "Implementation agent that writes code, fixes bugs, and creates tests for the jungle",
+      "description": "Implementation agent that writes productive code and fixes bugs for the jungle",
       "mode": "subagent",
       "model": "opencode-go/kimi-k2.5",
       "temperature": 0.2,

@@ -67,3 +67,6 @@ coverage/
 
 # TypeScript
 *.tsbuildinfo
+
+# AI Memory
+.memory/
