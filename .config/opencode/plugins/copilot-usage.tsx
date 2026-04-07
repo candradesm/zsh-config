@@ -6,7 +6,7 @@ import { mkdirSync, appendFileSync } from "node:fs"
 
 const QUOTA_REFRESH_MS = 5 * 60 * 1000
 const MAX_POLL_ATTEMPTS = 30
-const PLUGIN_VERSION = "v13-race-fix"
+const PLUGIN_VERSION = "v14-copilot-filter"
 
 interface CopilotConfig {
   modelMultipliers: Record<string, number>
@@ -315,8 +315,12 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
       const isFreePlan = quotaInfo()?.planType === "free"
       let total = 0
       for (const um of userMsgs) {
-        const mult = isFreePlan ? 1.0 : (um.model ? getMultiplier(um.model, config()) : 1.0)
-        log("fetchSessionUsage: user msg", um.id, "model:", um.model, "multiplier:", mult)
+        const isCopilot = um.model ? getModelId(um.model) !== null : false
+        let mult = 0
+        if (isCopilot) {
+          mult = isFreePlan ? 1.0 : getMultiplier(um.model!, config())
+        }
+        log("fetchSessionUsage: user msg", um.id, "model:", um.model, "isCopilot:", isCopilot, "multiplier:", mult)
         messageMultipliers.set(um.id, mult)
         total += mult
       }
