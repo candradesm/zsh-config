@@ -217,10 +217,13 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
   const [activeModel, setActiveModel] = createSignal<string | null>(null)
   const [sessionLoading, setSessionLoading] = createSignal<boolean>(false)
 
+  const countedMessageIds = new Set<string>()
+
   // Load config once on mount
   loadConfig().then(setConfig).catch((err) => log("loadConfig failed:", String(err)))
 
   async function fetchSessionUsage(sessionID: string, model: string) {
+    countedMessageIds.clear()
     try {
       const result = await props.api.client.session.messages({
         sessionID,
@@ -231,6 +234,7 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
       for (const item of result.data ?? []) {
         if (item.info?.role === "user") {
           count++
+          if (item.id) countedMessageIds.add(item.id)
         }
       }
       setSessionUsage(count * multiplier)
@@ -321,6 +325,8 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
         if (e.properties.sessionID !== sessionID) return
         const msg = e.properties.info
         if (msg.role !== "user") return
+        if (msg.id && countedMessageIds.has(msg.id)) return
+        if (msg.id) countedMessageIds.add(msg.id)
         const curModel = currentModel()
         if (curModel && isCopilotModel(curModel)) {
           const multiplier = getMultiplier(curModel, config())
@@ -332,10 +338,6 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
     })
 
     const unsubCompacted = props.api.event.on("session.compacted", () => {
-      const curModel = currentModel()
-      if (curModel && isCopilotModel(curModel)) {
-        fetchSessionUsage(sessionID, curModel)
-      }
       fetchQuota()
     })
 
