@@ -6,7 +6,7 @@ import { mkdirSync, appendFileSync } from "node:fs"
 
 const QUOTA_REFRESH_MS = 5 * 60 * 1000
 const MAX_POLL_ATTEMPTS = 30
-const PLUGIN_VERSION = "v6-quota-fixed"
+const PLUGIN_VERSION = "v13-race-fix"
 
 interface CopilotConfig {
   modelMultipliers: Record<string, number>
@@ -18,9 +18,10 @@ interface CopilotQuotaInfo {
   overageCount: number
   overagePermitted: boolean
   unlimited: boolean
+  planType: "free" | "paid"
 }
 
-const DEBUG = process.env.OPENCODE_COPILOT_DEBUG !== "false"
+const DEBUG = process.env.OPENCODE_COPILOT_DEBUG === "true"
 const logsDir = new URL("./logs", import.meta.url).pathname
 const logPath = new URL(`./logs/log_copilot_plugin_${Date.now()}.log`, import.meta.url).pathname
 if (DEBUG) mkdirSync(logsDir, { recursive: true })
@@ -166,6 +167,7 @@ async function fetchQuotaInfo(token: string): Promise<CopilotQuotaInfo | null> {
         overageCount: snapshot.overage_count ?? 0,
         overagePermitted: snapshot.overage_permitted ?? false,
         unlimited: snapshot.unlimited ?? false,
+        planType: "paid",
       }
     }
 
@@ -181,6 +183,7 @@ async function fetchQuotaInfo(token: string): Promise<CopilotQuotaInfo | null> {
         overageCount: 0,
         overagePermitted: false,
         unlimited: false,
+        planType: "free",
       }
     }
 
@@ -196,6 +199,22 @@ function buildProgressBar(percentage: number, width: number = 20): string {
   const filled = Math.min(Math.round((percentage / 100) * width), width)
   const empty = width - filled
   return "\u2588".repeat(filled) + "\u2591".repeat(empty)
+}
+
+function roundUsage(value: number): number {
+  let rounded = Math.round(value * 100) / 100
+  // Handle imprecise multiplier artifacts (0.33 ≈ 1/3):
+  // 2×0.33=0.65→0.67, 4×0.33=1.32→1.33, etc.
+  let cents = Math.round((rounded % 1) * 100)
+  if (cents > 0 && cents < 100 && cents % 33 === 32) {
+    rounded = Math.round((rounded + 0.01) * 100) / 100
+    cents = Math.round((rounded % 1) * 100)
+  }
+  // Handle .99 → round up (3×0.33=0.99→1.00)
+  if (cents === 99) {
+    return Math.ceil(rounded)
+  }
+  return rounded
 }
 
 function getUsageColor(percentage: number): string {
@@ -217,27 +236,94 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
   const [activeModel, setActiveModel] = createSignal<string | null>(null)
   const [sessionLoading, setSessionLoading] = createSignal<boolean>(false)
 
-  const countedMessageIds = new Set<string>()
+  const messageMultipliers = new Map<string, number>()
+  let loadedSessionID: string | null = null
 
   // Load config once on mount
   loadConfig().then(setConfig).catch((err) => log("loadConfig failed:", String(err)))
 
-  async function fetchSessionUsage(sessionID: string, model: string) {
-    countedMessageIds.clear()
+  async function fetchSessionUsage(sessionID: string) {
+    messageMultipliers.clear()
     try {
+      log("fetchSessionUsage: fetching messages for session:", sessionID)
       const result = await props.api.client.session.messages({
         sessionID,
         limit: 10000,
       })
-      let count = 0
-      const multiplier = getMultiplier(model, config())
-      for (const item of result.data ?? []) {
-        if (item.info?.role === "user") {
-          count++
-          if (item.id) countedMessageIds.add(item.id)
+      const messages = result.data ?? []
+      log("fetchSessionUsage: got", messages.length, "messages")
+      if (messages.length > 0) {
+        log("fetchSessionUsage: first msg keys:", Object.keys(messages[0] as any).join(","), "id:", messages[0].id)
+        log("fetchSessionUsage: first msg info keys:", Object.keys(messages[0].info as any ?? {}).join(","), "info.id:", (messages[0].info as any)?.id)
+        log("fetchSessionUsage: first msg full info:", JSON.stringify(messages[0].info))
+      }
+
+      // Collect user messages and assistant models
+      const userMsgs: { id: string; model: string | null }[] = []
+      for (const item of messages) {
+        const msgId = item.id ?? (item.info as any)?.id ?? (item as any)?.messageID ?? (item as any)?.uid
+        log("fetchSessionUsage: checking msg id:", msgId, "role:", item.info?.role)
+        if (item.info?.role === "user" && msgId) {
+          userMsgs.push({ id: msgId, model: null })
         }
       }
-      setSessionUsage(count * multiplier)
+      log("fetchSessionUsage: collected", userMsgs.length, "user messages")
+
+      // Pass 1: REVERSE scan — assign each assistant msg to the nearest preceding user msg
+      let uIdx = userMsgs.length - 1
+      for (let i = messages.length - 1; i >= 0 && uIdx >= 0; i--) {
+        const role = messages[i].info?.role
+        if (role === "user") {
+          uIdx--
+        } else if (role === "assistant" && uIdx >= 0 && !userMsgs[uIdx].model) {
+          const providerID = (messages[i].info as any).providerID
+          const modelID = (messages[i].info as any).modelID
+          if (providerID && modelID) {
+            userMsgs[uIdx].model = `${providerID}/${modelID}`
+          }
+        }
+      }
+
+      // Pass 2: for user msgs still without model, look ahead at next assistant AFTER them
+      let msgIdx = 0
+      for (const um of userMsgs) {
+        if (um.model) continue
+        // Find this user msg's position in the messages array
+        while (msgIdx < messages.length) {
+          if (messages[msgIdx].info?.role === "user" && messages[msgIdx].id === um.id) {
+            msgIdx++
+            break
+          }
+          msgIdx++
+        }
+        // Look ahead for next assistant
+        while (msgIdx < messages.length) {
+          const role = messages[msgIdx].info?.role
+          if (role === "assistant") {
+            const providerID = (messages[msgIdx].info as any).providerID
+            const modelID = (messages[msgIdx].info as any).modelID
+            if (providerID && modelID) {
+              um.model = `${providerID}/${modelID}`
+              break
+            }
+          }
+          msgIdx++
+        }
+      }
+
+      // Calculate total
+      const isFreePlan = quotaInfo()?.planType === "free"
+      let total = 0
+      for (const um of userMsgs) {
+        const mult = isFreePlan ? 1.0 : (um.model ? getMultiplier(um.model, config()) : 1.0)
+        log("fetchSessionUsage: user msg", um.id, "model:", um.model, "multiplier:", mult)
+        messageMultipliers.set(um.id, mult)
+        total += mult
+      }
+
+      log("fetchSessionUsage: total usage:", total)
+      setSessionUsage(roundUsage(total))
+      loadedSessionID = sessionID
     } catch (err) {
       log("fetchSessionUsage error:", String(err))
       setSessionUsage(0)
@@ -270,18 +356,11 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
   let pollCount = 0
   const modelPoller = setInterval(() => {
     pollCount++
-    const configModel = props.api.state.config?.model
-    const msgCount = props.api.state.session.messages(props.session_id).length
-    const providers = (props.api.state.provider ?? []).map(p => p.id)
-    log("poll #" + pollCount + " config.model:", configModel, "msgs:", msgCount, "providers:", providers.join(","))
-
     const detected = getActiveModel(props.api, props.session_id)
-    log("poll #" + pollCount + " detected:", detected, "activeModel:", activeModel())
     if (detected !== activeModel()) {
-      log("poll #" + pollCount + " CHANGE detected:", detected)
+      log("poll #" + pollCount + " model change:", detected)
       setActiveModel(detected)
     }
-    // Stop polling after 30 attempts (60s) if we found a model
     if (detected && pollCount > MAX_POLL_ATTEMPTS) {
       clearInterval(modelPoller)
     }
@@ -289,35 +368,29 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
 
   onCleanup(() => clearInterval(modelPoller))
 
-  // React to model changes detected by the poller (when api.state isn't reactive)
-  createEffect(() => {
-    const model = activeModel()
-    if (!model || !isCopilotModel(model)) return
-    const sessionID = props.session_id
-    if (!sessionID) return
-    log("CopilotUsageSidebar: activeModel changed to copilot model:", model)
-    setSessionLoading(true)
-    fetchSessionUsage(sessionID, model).then(() => setSessionLoading(false))
-    fetchQuota()
-  })
-
   createEffect(() => {
     const sessionID = props.session_id
-    if (!sessionID) return
+    if (!sessionID) {
+      log("createEffect: no sessionID, skipping")
+      return
+    }
 
     const model = currentModel()
     setActiveModel(model)
-    log("CopilotUsageSidebar: sessionID:", sessionID, "model:", model)
+    log("createEffect: sessionID:", sessionID, "model:", model, "loadedSessionID:", loadedSessionID, "isCopilot:", model ? isCopilotModel(model) : false)
 
-    if (model && isCopilotModel(model)) {
-      setSessionLoading(true)
-      fetchSessionUsage(sessionID, model).then(() => setSessionLoading(false))
-    } else {
-      setSessionLoading(false)
-      setSessionUsage(0)
-    }
-
-    fetchQuota()
+    // Fetch quota first so planType is available for fetchSessionUsage
+    fetchQuota().then(() => {
+      if (model && isCopilotModel(model)) {
+        if (loadedSessionID !== sessionID) {
+          setSessionLoading(true)
+          fetchSessionUsage(sessionID).then(() => setSessionLoading(false))
+        }
+      } else {
+        setSessionLoading(false)
+        if (loadedSessionID !== sessionID) setSessionUsage(0)
+      }
+    })
 
     const unsubMessage = props.api.event.on("message.updated", (event) => {
       try {
@@ -325,12 +398,12 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
         if (e.properties.sessionID !== sessionID) return
         const msg = e.properties.info
         if (msg.role !== "user") return
-        if (msg.id && countedMessageIds.has(msg.id)) return
-        if (msg.id) countedMessageIds.add(msg.id)
+        if (msg.id && messageMultipliers.has(msg.id)) return
         const curModel = currentModel()
         if (curModel && isCopilotModel(curModel)) {
-          const multiplier = getMultiplier(curModel, config())
-          setSessionUsage((prev) => prev + multiplier)
+          const multiplier = quotaInfo()?.planType === "free" ? 1.0 : getMultiplier(curModel, config())
+          if (msg.id) messageMultipliers.set(msg.id, multiplier)
+          setSessionUsage((prev) => roundUsage(prev + multiplier))
         }
       } catch (err) {
         log("message.updated handler error:", String(err))
@@ -385,7 +458,7 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
           {sessionLoading() ? (
             <text fg={props.api.theme.current?.muted ?? "#888888"}>Loading...</text>
           ) : (
-            <text fg="#ffffff">{sessionUsage().toFixed(2)} premium requests</text>
+            <text fg="#ffffff">{sessionUsage().toFixed(2)} {quotaInfo()?.planType === "free" ? "chat requests" : "premium requests"}</text>
           )}
           <text fg={props.api.theme.current?.muted ?? "#888888"}>Monthly quota</text>
           {!hasToken ? (
