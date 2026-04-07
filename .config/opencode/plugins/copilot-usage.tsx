@@ -403,9 +403,20 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
         const msg = e.properties.info
         if (msg.role !== "user") return
         if (msg.id && messageMultipliers.has(msg.id)) return
-        const curModel = currentModel()
-        if (curModel && isCopilotModel(curModel)) {
-          const multiplier = quotaInfo()?.planType === "free" ? 1.0 : getMultiplier(curModel, config())
+        // Check last assistant message directly (not currentModel which only tracks copilot)
+        const msgs = props.api.state.session.messages(sessionID)
+        let lastProviderID: string | undefined
+        let lastModelID: string | undefined
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          if (msgs[i].role === "assistant") {
+            lastProviderID = msgs[i].providerID
+            lastModelID = msgs[i].modelID
+            break
+          }
+        }
+        const lastModel = lastProviderID && lastModelID ? `${lastProviderID}/${lastModelID}` : null
+        if (lastModel && isCopilotModel(lastModel)) {
+          const multiplier = quotaInfo()?.planType === "free" ? 1.0 : getMultiplier(lastModel, config())
           if (msg.id) messageMultipliers.set(msg.id, multiplier)
           setSessionUsage((prev) => roundUsage(prev + multiplier))
         }
