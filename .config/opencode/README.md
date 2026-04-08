@@ -10,7 +10,11 @@ Sidebar widget showing GitHub Copilot premium request usage.
 
 - Session usage tracking (user prompts × model multiplier)
 - Monthly quota from GitHub API (paid and free plans)
-- Progress bar with color coding (green/yellow/red)
+- Displays percentage **used** with progress bar (matching GitHub's UI)
+- Color coding based on usage level:
+  - Green: ≤75% used
+  - Yellow: 75–90% used
+  - Red: >90% used (or over quota)
 - Auto-refresh every 5 minutes
 
 **Files:** `plugins/copilot-usage.tsx`, `plugins/copilot-usage.config.json`, `plugins/tui.json`
