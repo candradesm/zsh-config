@@ -448,13 +448,6 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
     return (used / quota.entitlement) * 100
   })
 
-  const remainingPercentage = createMemo(() => {
-    const quota = quotaInfo()
-    if (!quota) return 0
-    if (quota.unlimited) return 100
-    return quota.percentRemaining
-  })
-
   const usageColor = createMemo(() => getUsageColor(usagePercentage()))
 
   const isCopilot = createMemo(() => {
@@ -482,8 +475,8 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
             <text fg="#22c55e">Unlimited</text>
           ) : quotaInfo() ? (
             <box flexDirection="column" gap={0}>
-              <text fg={usageColor()}>{remainingPercentage().toFixed(1)}% remaining</text>
-              <text fg={usageColor()}>{buildProgressBar(100 - remainingPercentage())}</text>
+              <text fg={usageColor()}>{usagePercentage().toFixed(1)}% used</text>
+              <text fg={usageColor()}>{buildProgressBar(usagePercentage())}</text>
             </box>
           ) : quotaLoading() ? (
             <text fg="#888888">Loading...</text>

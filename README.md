@@ -114,7 +114,7 @@ This config provides full IDE support for Android development with Neovim:
 1. Open any `.kt` or `.java` file in an Android project
 2. LSP will auto-start and provide IDE features
 3. Use `:Mason` to install missing tools if needed
-4. See [ANDROID_DEV_SETUP.md](.config/nvim/ANDROID_DEV_SETUP.md) for detailed configuration
+4. Run `:AndroidInfo` to check SDK and project configuration
 
 **Optional Features:**
 The file `lua/plugins/android-extras.lua` contains optional plugins for:

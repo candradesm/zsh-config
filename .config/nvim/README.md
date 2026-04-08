@@ -56,20 +56,39 @@ nvim
 
 ## Android Development
 
-See [ANDROID_DEV_SETUP.md](ANDROID_DEV_SETUP.md) for detailed setup instructions.
+This config provides full IDE support for Android/Kotlin development.
+
+### What's Included
+
+- **Kotlin & Java LSP** — autocomplete, goto definition, hover docs, refactoring
+- **Auto-formatting** — ktlint for Kotlin, google-java-format for Java (runs on save)
+- **XML support** — syntax highlighting for Android layouts
+- **Debugger** — Kotlin debugger with attach-to-process (port 5005)
+- **Statusline** — shows "Android" or "Gradle" indicator when in a project
+- **SDK detection** — auto-detects SDK from `ANDROID_SDK_ROOT` or common paths (`~/Library/Android/sdk`, `~/Android/Sdk`)
 
 ### Quick Start
 
 1. Open any `.kt` or `.java` file in an Android project
 2. LSP will auto-start and provide IDE features
 3. Use `:Mason` to install missing tools if needed
+4. Run `:AndroidInfo` to check SDK path, JVM target, and project status
 
 ### Environment Variables
 
-Set in `~/.zsh-config/nvim-config.sh`:
+- `ANDROID_SDK_ROOT` — Android SDK path (auto-detected if not set)
+- `GRADLE_JVM_TARGET` — JVM target version (auto-detected from project)
+- `GRADLE_CACHE` — enable/disable Gradle caching (default: `true`)
 
-- `ANDROID_SDK_ROOT` — Android SDK path
-- `GRADLE_JVM_TARGET` — JVM target (auto-detected from project)
+### Optional Extras
+
+The file `lua/plugins/android-extras.lua` contains disabled-by-default plugins for:
+
+- **Full Android IDE** (`android-nvim-plugin`) — `:AndroidBuild`, `:AndroidRun`, `:AndroidLogcat`, `:AndroidDevices`, `:AndroidEmulator`
+- **Terminal ADB shortcuts** — `<leader>ad` (devices), `<leader>al` (logcat), `<leader>ai` (install APK)
+- **Gradle task runner** — `<leader>gb` (build), `<leader>gt` (test), `<leader>gc` (clean), `<leader>gr` (custom task)
+
+Uncomment the sections you want in that file to enable them.
 
 ## Troubleshooting
 
