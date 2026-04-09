@@ -544,6 +544,17 @@ export const NotificationsPlugin = async ({ $ }: { $: typeof import("bun").$ }) 
   // suppress "Task completed!" notifications when only a subagent finishes.
   const subagentSessionIds = new Set<string>()
   const trackedSessionIds = new Map<string, TrackedSession>()
+  const erroredSessionIds = new Set<string>()
+  const idleNotifiedSessionIds = new Set<string>()
+
+  const MAX_SESSION_SET_SIZE = CONFIG.maxRecentNotifications
+  const trimSet = (set: Set<string>): void => {
+    if (set.size > MAX_SESSION_SET_SIZE) {
+      const toRemove = set.size - MAX_SESSION_SET_SIZE
+      const iter = set.values()
+      for (let i = 0; i < toRemove; i++) set.delete(iter.next().value!)
+    }
+  }
 
   return {
     event: async ({ event }: { event: PluginEvent }) => {
@@ -561,6 +572,7 @@ export const NotificationsPlugin = async ({ $ }: { $: typeof import("bun").$ }) 
           trackedSessionIds.set(sid, { parentID: info.parentID, title: info.title })
           if (info.parentID) {
             subagentSessionIds.add(sid)
+            trimSet(subagentSessionIds)
             log(`TRACKED subagent session=${sid} parentID=${info.parentID} title=${info.title}`)
           } else {
             log(`TRACKED main session=${sid} title=${info.title}`)
@@ -580,6 +592,19 @@ export const NotificationsPlugin = async ({ $ }: { $: typeof import("bun").$ }) 
           trackedSessionIds.delete(sessionID)
           return
         }
+        if (sessionID && erroredSessionIds.has(sessionID)) {
+          log(`session.idle | SKIPPED idle after error for session=${sessionID}`)
+          erroredSessionIds.delete(sessionID)
+          return
+        }
+        if (sessionID && idleNotifiedSessionIds.has(sessionID)) {
+          log(`session.idle | SKIPPED duplicate idle for session=${sessionID}`)
+          return
+        }
+        if (sessionID) {
+          idleNotifiedSessionIds.add(sessionID)
+          trimSet(idleNotifiedSessionIds)
+        }
         log(`session.idle | SENDING main agent notification for session=${sessionID}`)
         await handleNotificationEvent("session.idle", "idle")
         return
@@ -591,13 +616,20 @@ export const NotificationsPlugin = async ({ $ }: { $: typeof import("bun").$ }) 
         if (sessionID) {
           subagentSessionIds.delete(sessionID)
           trackedSessionIds.delete(sessionID)
+          erroredSessionIds.delete(sessionID)
+          idleNotifiedSessionIds.delete(sessionID)
         }
+        return
       }
 
       if (event.type === "session.error") {
         const props = event.properties as SessionEventProperties | undefined
         const sessionID = props?.sessionID
-        if (sessionID) subagentSessionIds.delete(sessionID)
+        if (sessionID) {
+          subagentSessionIds.delete(sessionID)
+          erroredSessionIds.add(sessionID)
+          trimSet(erroredSessionIds)
+        }
         await handleNotificationEvent("session.error", "error")
         return
       }
@@ -623,10 +655,17 @@ export const NotificationsPlugin = async ({ $ }: { $: typeof import("bun").$ }) 
       log(`tool.execute.before | tool=${JSON.stringify(toolName)} | input keys=${Object.keys(input ?? {}).join(",")}`)
       if (toolName.toLowerCase() !== "question") return
       if (!CONFIG.events.question) return
+      if (!shouldNotify("question")) return
       const focused = await isTerminalFocused()
       log(`tool.execute.before(question) | terminalProcessName=${terminalProcessName} | focused=${focused}`)
       if (focused) return
       await notify(CONFIG.messages.question, "OpenCode", CONFIG.sounds.question)
+    },
+
+    "tool.execute.after": async (input: ToolExecuteInput) => {
+      if (!isSupported) return
+      const toolName = typeof input?.tool === "string" ? input.tool : ""
+      log(`tool.execute.after | tool=${JSON.stringify(toolName)}`)
     },
   }
 }
