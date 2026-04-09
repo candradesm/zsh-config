@@ -6,7 +6,7 @@ import { mkdirSync, appendFileSync } from "node:fs"
 
 const QUOTA_REFRESH_MS = 5 * 60 * 1000
 const MAX_POLL_ATTEMPTS = 30
-const PLUGIN_VERSION = "v14-copilot-filter"
+const PLUGIN_VERSION = "v18-fix-synthetic-detection"
 
 interface CopilotConfig {
   modelMultipliers: Record<string, number>
@@ -19,6 +19,11 @@ interface CopilotQuotaInfo {
   overagePermitted: boolean
   unlimited: boolean
   planType: "free" | "paid"
+}
+
+interface MessagePart {
+  type: string
+  synthetic?: boolean
 }
 
 const DEBUG = process.env.OPENCODE_COPILOT_DEBUG === "true"
@@ -87,6 +92,48 @@ function getMultiplier(modelName: string, config: CopilotConfig): number {
 function isCopilotModel(modelName: string): boolean {
   if (!modelName) return false
   return modelName.toLowerCase().includes("copilot")
+}
+
+function isSyntheticMessage(parts: MessagePart[]): boolean {
+  // Messages with a "compaction" type part are the real compaction request — always count them.
+  if (parts.some((p) => p.type === "compaction")) return false
+  // The synthetic *continuation* message (auto-created after compaction to resume the chat)
+  // has ONLY {type:"text", synthetic:true} parts and nothing else.
+  // Real user messages may also contain synthetic text parts (e.g. the first message in a
+  // session after context refill), but they always have at least one non-synthetic part too
+  // (e.g. a plain "text" part, a "file" part, etc.).
+  const syntheticTextParts = parts.filter((p) => p.type === "text" && p.synthetic === true)
+  if (syntheticTextParts.length === 0) return false
+  const nonSyntheticParts = parts.filter((p) => !(p.type === "text" && p.synthetic === true))
+  return nonSyntheticParts.length === 0
+}
+
+function calculateMessageMultiplier(
+  msgId: string,
+  parts: MessagePart[],
+  model: string | null,
+  isFreePlan: boolean,
+  config: CopilotConfig,
+  messageMultipliers: Map<string, number>
+): number {
+  if (isSyntheticMessage(parts)) {
+    // Don't store in map — storing 0 would permanently blacklist the message ID,
+    // preventing any future retry if parts change (e.g. message.updated fires again).
+    log("calculateMessageMultiplier: skipping synthetic message", msgId)
+    return 0
+  }
+
+  if (!model || getModelId(model) === null) {
+    // Don't store in map — allows retry when the model becomes available on the next event fire.
+    log("calculateMessageMultiplier: no copilot model for", msgId, "model:", model)
+    return 0
+  }
+
+  const multiplier = isFreePlan ? 1.0 : getMultiplier(model, config)
+  log("calculateMessageMultiplier:", msgId, "model:", model, "multiplier:", multiplier)
+  // Only store positive results — the deduplication guard in message.updated checks this map.
+  messageMultipliers.set(msgId, multiplier)
+  return multiplier
 }
 
 function getActiveModel(api: TuiPluginApi, sessionID: string): string | null {
@@ -258,13 +305,23 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
         log("fetchSessionUsage: first msg full info:", JSON.stringify(messages[0].info))
       }
 
-      // Collect user messages and assistant models
-      const userMsgs: { id: string; model: string | null }[] = []
+      // Collect user messages — model is read directly from UserMessage.model (required field in
+      // OpenCode schema: z.object({ providerID, modelID, variant? }), never optional).
+      // api.client.session.messages() returns { info: Message, parts: Part[] }[] so parts are
+      // available directly without a separate api.state.part() call.
+      const userMsgs: { id: string; model: string | null; parts: MessagePart[] }[] = []
       for (const item of messages) {
         const msgId = item.id ?? (item.info as any)?.id ?? (item as any)?.messageID ?? (item as any)?.uid
         log("fetchSessionUsage: checking msg id:", msgId, "role:", item.info?.role)
         if (item.info?.role === "user" && msgId) {
-          userMsgs.push({ id: msgId, model: null })
+          const parts = ((item as any).parts ?? []) as MessagePart[]
+          // Read model directly from UserMessage.model (providerID/modelID nested object)
+          const infoModel = (item.info as any)?.model
+          const model = infoModel?.providerID && infoModel?.modelID
+            ? `${infoModel.providerID}/${infoModel.modelID}` : null
+          log("fetchSessionUsage: user msg", msgId, "direct model:", model, "parts:", parts.length,
+            "partTypes:", parts.map((p: any) => p.type + (p.synthetic ? "[synthetic]" : "")).join(","))
+          userMsgs.push({ id: msgId, model, parts })
         }
       }
       log("fetchSessionUsage: collected", userMsgs.length, "user messages")
@@ -311,18 +368,24 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
         }
       }
 
+      // Pass 3: Final fallback — assign active model to any user msg still without one.
+      // Handles the most recent user message (no assistant response yet) and any edge case
+      // where item.info.model is absent in the API response.
+      const fallbackModel = getActiveModel(props.api, sessionID)
+      if (fallbackModel) {
+        for (const um of userMsgs) {
+          if (!um.model) {
+            um.model = fallbackModel
+            log("fetchSessionUsage: pass3 fallback model for msg:", um.id, "model:", fallbackModel)
+          }
+        }
+      }
+
       // Calculate total
       const isFreePlan = quotaInfo()?.planType === "free"
       let total = 0
       for (const um of userMsgs) {
-        const isCopilot = um.model ? getModelId(um.model) !== null : false
-        let mult = 0
-        if (isCopilot) {
-          mult = isFreePlan ? 1.0 : getMultiplier(um.model!, config())
-        }
-        log("fetchSessionUsage: user msg", um.id, "model:", um.model, "isCopilot:", isCopilot, "multiplier:", mult)
-        messageMultipliers.set(um.id, mult)
-        total += mult
+        total += calculateMessageMultiplier(um.id, um.parts, um.model, isFreePlan, config(), messageMultipliers)
       }
 
       log("fetchSessionUsage: total usage:", total)
@@ -403,21 +466,35 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
         const msg = e.properties.info
         if (msg.role !== "user") return
         if (msg.id && messageMultipliers.has(msg.id)) return
-        // Check last assistant message directly (not currentModel which only tracks copilot)
-        const msgs = props.api.state.session.messages(sessionID)
-        let lastProviderID: string | undefined
-        let lastModelID: string | undefined
-        for (let i = msgs.length - 1; i >= 0; i--) {
-          if (msgs[i].role === "assistant") {
-            lastProviderID = msgs[i].providerID
-            lastModelID = msgs[i].modelID
-            break
+
+        // 1. Read model directly from UserMessage.model (required field per OpenCode schema)
+        const userModel = (msg as any)?.model
+        let lastModel: string | null = userModel?.providerID && userModel?.modelID
+          ? `${userModel.providerID}/${userModel.modelID}` : null
+
+        // 2. Fallback: scan last assistant message in session state (≤100 msgs)
+        if (!lastModel) {
+          const msgs = props.api.state.session.messages(sessionID)
+          let lastProviderID: string | undefined
+          let lastModelID: string | undefined
+          for (let i = msgs.length - 1; i >= 0; i--) {
+            if (msgs[i].role === "assistant") {
+              lastProviderID = msgs[i].providerID
+              lastModelID = msgs[i].modelID
+              break
+            }
           }
+          lastModel = lastProviderID && lastModelID ? `${lastProviderID}/${lastModelID}` : null
         }
-        const lastModel = lastProviderID && lastModelID ? `${lastProviderID}/${lastModelID}` : null
-        if (lastModel && isCopilotModel(lastModel)) {
-          const multiplier = quotaInfo()?.planType === "free" ? 1.0 : getMultiplier(lastModel, config())
-          if (msg.id) messageMultipliers.set(msg.id, multiplier)
+
+        // 3. Final fallback: configured/detected active model (handles first message in session)
+        if (!lastModel) {
+          lastModel = getActiveModel(props.api, sessionID)
+        }
+        const parts = (props.api.state.part(msg.id!) ?? []) as MessagePart[]
+        const isFreePlan = quotaInfo()?.planType === "free"
+        const multiplier = calculateMessageMultiplier(msg.id!, parts, lastModel, isFreePlan, config(), messageMultipliers)
+        if (multiplier > 0) {
           setSessionUsage((prev) => roundUsage(prev + multiplier))
         }
       } catch (err) {
@@ -426,7 +503,9 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
     })
 
     const unsubCompacted = props.api.event.on("session.compacted", () => {
+      // Compaction messages are counted in message.updated; synthetic ones skipped via flag
       fetchQuota()
+      log("session.compacted: quota refreshed")
     })
 
     const refreshInterval = setInterval(() => {
