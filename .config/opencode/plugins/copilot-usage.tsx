@@ -6,7 +6,7 @@ import { mkdirSync, appendFileSync } from "node:fs"
 
 const QUOTA_REFRESH_MS = 5 * 60 * 1000
 const MAX_POLL_ATTEMPTS = 30
-const PLUGIN_VERSION = "v17-fix-compaction-skip"
+const PLUGIN_VERSION = "v18-fix-synthetic-detection"
 
 interface CopilotConfig {
   modelMultipliers: Record<string, number>
@@ -95,11 +95,17 @@ function isCopilotModel(modelName: string): boolean {
 }
 
 function isSyntheticMessage(parts: MessagePart[]): boolean {
-  // Compaction user messages have a "compaction" type part — they are real API requests.
-  // Only the synthetic *continuation* message (created after compaction to resume the chat)
-  // has {type:"text", synthetic:true} parts but NO compaction part.
+  // Messages with a "compaction" type part are the real compaction request — always count them.
   if (parts.some((p) => p.type === "compaction")) return false
-  return parts.some((p) => p.type === "text" && p.synthetic === true)
+  // The synthetic *continuation* message (auto-created after compaction to resume the chat)
+  // has ONLY {type:"text", synthetic:true} parts and nothing else.
+  // Real user messages may also contain synthetic text parts (e.g. the first message in a
+  // session after context refill), but they always have at least one non-synthetic part too
+  // (e.g. a plain "text" part, a "file" part, etc.).
+  const syntheticTextParts = parts.filter((p) => p.type === "text" && p.synthetic === true)
+  if (syntheticTextParts.length === 0) return false
+  const nonSyntheticParts = parts.filter((p) => !(p.type === "text" && p.synthetic === true))
+  return nonSyntheticParts.length === 0
 }
 
 function calculateMessageMultiplier(
@@ -108,10 +114,9 @@ function calculateMessageMultiplier(
   model: string | null,
   isFreePlan: boolean,
   config: CopilotConfig,
-  messageMultipliers: Map<string, number>,
-  isCompaction: boolean = false
+  messageMultipliers: Map<string, number>
 ): number {
-  if (!isCompaction && isSyntheticMessage(parts)) {
+  if (isSyntheticMessage(parts)) {
     // Don't store in map — storing 0 would permanently blacklist the message ID,
     // preventing any future retry if parts change (e.g. message.updated fires again).
     log("calculateMessageMultiplier: skipping synthetic message", msgId)
@@ -304,7 +309,7 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
       // OpenCode schema: z.object({ providerID, modelID, variant? }), never optional).
       // api.client.session.messages() returns { info: Message, parts: Part[] }[] so parts are
       // available directly without a separate api.state.part() call.
-      const userMsgs: { id: string; model: string | null; parts: MessagePart[]; isCompaction: boolean }[] = []
+      const userMsgs: { id: string; model: string | null; parts: MessagePart[] }[] = []
       for (const item of messages) {
         const msgId = item.id ?? (item.info as any)?.id ?? (item as any)?.messageID ?? (item as any)?.uid
         log("fetchSessionUsage: checking msg id:", msgId, "role:", item.info?.role)
@@ -314,12 +319,9 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
           const infoModel = (item.info as any)?.model
           const model = infoModel?.providerID && infoModel?.modelID
             ? `${infoModel.providerID}/${infoModel.modelID}` : null
-          // Compaction user messages have info.summary set (e.g. {diffs:[...]})
-          const isCompaction = !!(item.info as any)?.summary
           log("fetchSessionUsage: user msg", msgId, "direct model:", model, "parts:", parts.length,
-            "isCompaction:", isCompaction,
             "partTypes:", parts.map((p: any) => p.type + (p.synthetic ? "[synthetic]" : "")).join(","))
-          userMsgs.push({ id: msgId, model, parts, isCompaction })
+          userMsgs.push({ id: msgId, model, parts })
         }
       }
       log("fetchSessionUsage: collected", userMsgs.length, "user messages")
@@ -383,7 +385,7 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
       const isFreePlan = quotaInfo()?.planType === "free"
       let total = 0
       for (const um of userMsgs) {
-        total += calculateMessageMultiplier(um.id, um.parts, um.model, isFreePlan, config(), messageMultipliers, um.isCompaction)
+        total += calculateMessageMultiplier(um.id, um.parts, um.model, isFreePlan, config(), messageMultipliers)
       }
 
       log("fetchSessionUsage: total usage:", total)
@@ -489,12 +491,9 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
         if (!lastModel) {
           lastModel = getActiveModel(props.api, sessionID)
         }
-        // Compaction user messages have msg.summary set — they are real API requests and must
-        // not be skipped even if their parts include synthetic text parts.
-        const isCompaction = !!(msg as any)?.summary
         const parts = (props.api.state.part(msg.id!) ?? []) as MessagePart[]
         const isFreePlan = quotaInfo()?.planType === "free"
-        const multiplier = calculateMessageMultiplier(msg.id!, parts, lastModel, isFreePlan, config(), messageMultipliers, isCompaction)
+        const multiplier = calculateMessageMultiplier(msg.id!, parts, lastModel, isFreePlan, config(), messageMultipliers)
         if (multiplier > 0) {
           setSessionUsage((prev) => roundUsage(prev + multiplier))
         }
