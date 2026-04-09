@@ -410,6 +410,8 @@ await client.app.log({
 10. **Never store `0` in a deduplication map to mark a message as "counted but skipped"** — this permanently blacklists the ID and prevents any future retry (e.g. if the model becomes available on a later `message.updated` fire)
 11. **Always read `UserMessage.model` directly** — do NOT scan adjacent `AssistantMessage`s to infer the model; for the first message in a session no assistant has responded yet, making the scan return null and silently skip counting
 12. **`session.compacted` is a BusEvent (ephemeral)** — it fires in real-time but is NOT replayed when loading historical sessions. To detect past compactions, scan messages for parts with `type: "compaction"`
+13. **`UserMessage.summary` is present on ALL user messages** (it is part of the `UserMessage` schema) — it is NOT specific to compaction messages. Never use it as a compaction indicator.
+14. **`parts.some(p => p.synthetic)` is wrong for synthetic detection** — the first real user message in a session can have mixed parts (e.g. `text, file, text[synthetic]`). Using `.some()` incorrectly marks it as synthetic and skips counting it. The only reliable check is: a message is synthetic if and only if it has at least one `{type:"text", synthetic:true}` part AND has NO non-synthetic parts (i.e. `isSyntheticMessage()` with the "all parts must be synthetic" condition).
 
 ---
 
@@ -584,9 +586,23 @@ const parts = api.state.part(msg.id!) ?? []
 const isCompaction = parts.some((p) => p.type === "compaction")
 
 // Detect synthetic "continue" message (NOT a premium request)
-const isSynthetic = parts.some((p) => p.type === "text" && (p as any).synthetic === true)
+// ⚠️ CRITICAL: Use isSyntheticMessage(), NOT parts.some(synthetic) — see pitfall #14 below
+const isSynthetic = isSyntheticMessage(parts)
 
 // Regular user message — neither
+```
+
+Where `isSyntheticMessage` must be defined as:
+```tsx
+function isSyntheticMessage(parts: Part[]): boolean {
+  // Compaction user messages have a "compaction" part — never synthetic
+  if (parts.some((p) => p.type === "compaction")) return false
+  const syntheticTextParts = parts.filter((p) => p.type === "text" && (p as any).synthetic === true)
+  if (syntheticTextParts.length === 0) return false
+  // Only truly synthetic if ALL parts are synthetic text — mixed messages are real requests
+  const nonSyntheticParts = parts.filter((p) => !(p.type === "text" && (p as any).synthetic === true))
+  return nonSyntheticParts.length === 0
+}
 ```
 
 **In `fetchSessionUsage` (load path)** — use `item.parts` from `api.client.session.messages()`:
@@ -608,9 +624,9 @@ const model = userModel?.providerID && userModel?.modelID
   ? `${userModel.providerID}/${userModel.modelID}` : null
 
 // Skip synthetic messages — they are not real premium requests
+// ⚠️ Use isSyntheticMessage() — parts.some(synthetic) wrongly skips mixed messages (see pitfall #14)
 const parts = api.state.part(msg.id!) ?? []
-const isSynthetic = parts.some(p => p.type === "text" && (p as any).synthetic === true)
-if (isSynthetic) {
+if (isSyntheticMessage(parts)) {
   return  // ✅ Just return — do NOT store in deduplication map (storing 0 blacklists the ID)
 }
 
@@ -660,7 +676,8 @@ async function countSessionUsage(sessionID: string, api: TuiPluginApi, config: M
     const parts = ((item as any).parts ?? []) as Part[]
 
     // Skip synthetic "continue" messages (injected after compaction, not a real request)
-    if (parts.some(p => p.type === "text" && (p as any).synthetic === true)) continue
+    // ⚠️ Must check ALL parts are synthetic — mixed messages (real + synthetic) are real requests
+    if (isSyntheticMessage(parts)) continue
 
     // Read model directly from UserMessage.model (REQUIRED field, always present)
     const infoModel = (item.info as any)?.model
@@ -694,9 +711,9 @@ api.event.on("message.updated", (event) => {
   // Deduplication — message.updated fires multiple times per message
   if (msg.id && messageMultipliers.has(msg.id)) return
 
-  // Skip synthetic messages
+  // Skip synthetic messages (⚠️ must check ALL parts are synthetic — see isSyntheticMessage)
   const parts = (api.state.part(msg.id!) ?? []) as Part[]
-  if (parts.some(p => p.type === "text" && (p as any).synthetic === true)) return
+  if (isSyntheticMessage(parts)) return
 
   // Read model from UserMessage.model (tier 1 — always preferred)
   const userModel = (msg as any)?.model as { providerID: string; modelID: string } | undefined
