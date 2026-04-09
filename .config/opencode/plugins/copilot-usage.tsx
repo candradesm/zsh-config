@@ -6,7 +6,7 @@ import { mkdirSync, appendFileSync } from "node:fs"
 
 const QUOTA_REFRESH_MS = 5 * 60 * 1000
 const MAX_POLL_ATTEMPTS = 30
-const PLUGIN_VERSION = "v15-fix-model-detection"
+const PLUGIN_VERSION = "v16-fix-off-by-1"
 
 interface CopilotConfig {
   modelMultipliers: Record<string, number>
@@ -354,6 +354,19 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
             }
           }
           msgIdx++
+        }
+      }
+
+      // Pass 3: Final fallback — assign active model to any user msg still without one.
+      // Handles the most recent user message (no assistant response yet) and any edge case
+      // where item.info.model is absent in the API response.
+      const fallbackModel = getActiveModel(props.api, sessionID)
+      if (fallbackModel) {
+        for (const um of userMsgs) {
+          if (!um.model) {
+            um.model = fallbackModel
+            log("fetchSessionUsage: pass3 fallback model for msg:", um.id, "model:", fallbackModel)
+          }
         }
       }
 
