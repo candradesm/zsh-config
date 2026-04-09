@@ -6,7 +6,7 @@ import { mkdirSync, appendFileSync } from "node:fs"
 
 const QUOTA_REFRESH_MS = 5 * 60 * 1000
 const MAX_POLL_ATTEMPTS = 30
-const PLUGIN_VERSION = "v14-copilot-filter"
+const PLUGIN_VERSION = "v15-fix-model-detection"
 
 interface CopilotConfig {
   modelMultipliers: Record<string, number>
@@ -107,18 +107,21 @@ function calculateMessageMultiplier(
   messageMultipliers: Map<string, number>
 ): number {
   if (isSyntheticMessage(parts)) {
+    // Don't store in map — storing 0 would permanently blacklist the message ID,
+    // preventing any future retry if parts change (e.g. message.updated fires again).
     log("calculateMessageMultiplier: skipping synthetic message", msgId)
-    messageMultipliers.set(msgId, 0)
     return 0
   }
 
   if (!model || getModelId(model) === null) {
-    messageMultipliers.set(msgId, 0)
+    // Don't store in map — allows retry when the model becomes available on the next event fire.
+    log("calculateMessageMultiplier: no copilot model for", msgId, "model:", model)
     return 0
   }
 
   const multiplier = isFreePlan ? 1.0 : getMultiplier(model, config)
   log("calculateMessageMultiplier:", msgId, "model:", model, "multiplier:", multiplier)
+  // Only store positive results — the deduplication guard in message.updated checks this map.
   messageMultipliers.set(msgId, multiplier)
   return multiplier
 }
@@ -292,14 +295,22 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
         log("fetchSessionUsage: first msg full info:", JSON.stringify(messages[0].info))
       }
 
-      // Collect user messages and their parts
+      // Collect user messages — model is read directly from UserMessage.model (required field in
+      // OpenCode schema: z.object({ providerID, modelID, variant? }), never optional).
+      // api.client.session.messages() returns { info: Message, parts: Part[] }[] so parts are
+      // available directly without a separate api.state.part() call.
       const userMsgs: { id: string; model: string | null; parts: MessagePart[] }[] = []
       for (const item of messages) {
         const msgId = item.id ?? (item.info as any)?.id ?? (item as any)?.messageID ?? (item as any)?.uid
         log("fetchSessionUsage: checking msg id:", msgId, "role:", item.info?.role)
         if (item.info?.role === "user" && msgId) {
           const parts = ((item as any).parts ?? []) as MessagePart[]
-          userMsgs.push({ id: msgId, model: null, parts })
+          // Read model directly from UserMessage.model (providerID/modelID nested object)
+          const infoModel = (item.info as any)?.model
+          const model = infoModel?.providerID && infoModel?.modelID
+            ? `${infoModel.providerID}/${infoModel.modelID}` : null
+          log("fetchSessionUsage: user msg", msgId, "direct model:", model, "parts:", parts.length)
+          userMsgs.push({ id: msgId, model, parts })
         }
       }
       log("fetchSessionUsage: collected", userMsgs.length, "user messages")
@@ -432,18 +443,30 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
         if (msg.role !== "user") return
         if (msg.id && messageMultipliers.has(msg.id)) return
 
-        // Find last assistant message's model
-        const msgs = props.api.state.session.messages(sessionID)
-        let lastProviderID: string | undefined
-        let lastModelID: string | undefined
-        for (let i = msgs.length - 1; i >= 0; i--) {
-          if (msgs[i].role === "assistant") {
-            lastProviderID = msgs[i].providerID
-            lastModelID = msgs[i].modelID
-            break
+        // 1. Read model directly from UserMessage.model (required field per OpenCode schema)
+        const userModel = (msg as any)?.model
+        let lastModel: string | null = userModel?.providerID && userModel?.modelID
+          ? `${userModel.providerID}/${userModel.modelID}` : null
+
+        // 2. Fallback: scan last assistant message in session state (≤100 msgs)
+        if (!lastModel) {
+          const msgs = props.api.state.session.messages(sessionID)
+          let lastProviderID: string | undefined
+          let lastModelID: string | undefined
+          for (let i = msgs.length - 1; i >= 0; i--) {
+            if (msgs[i].role === "assistant") {
+              lastProviderID = msgs[i].providerID
+              lastModelID = msgs[i].modelID
+              break
+            }
           }
+          lastModel = lastProviderID && lastModelID ? `${lastProviderID}/${lastModelID}` : null
         }
-        const lastModel = lastProviderID && lastModelID ? `${lastProviderID}/${lastModelID}` : null
+
+        // 3. Final fallback: configured/detected active model (handles first message in session)
+        if (!lastModel) {
+          lastModel = getActiveModel(props.api, sessionID)
+        }
         const parts = (props.api.state.part(msg.id!) ?? []) as MessagePart[]
         const isFreePlan = quotaInfo()?.planType === "free"
         const multiplier = calculateMessageMultiplier(msg.id!, parts, lastModel, isFreePlan, config(), messageMultipliers)
