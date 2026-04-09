@@ -466,6 +466,62 @@ EventToolExecuteAfter  // { properties: { tool, sessionID, callID } }
 
 ---
 
+## Step 9 — Session compaction internals
+
+When a session is compacted, OpenCode performs these steps (source: `packages/opencode/src/session/compaction.ts`):
+
+### What happens during compaction
+
+1. **`create()`** — Creates a **user message** with a `compaction` part type
+2. **`process()`** — Makes a **real LLM API call** to generate a summary (consumes a premium request)
+3. **`process()`** — Creates an **assistant message** with `mode: "compaction"`, `summary: true`, `cost: 0`
+4. If auto mode and `result === "continue"`:
+   - Creates a **synthetic "continue" user message** with a text part that has `synthetic: true`
+5. Publishes `session.compacted` event
+
+### Message types created
+
+| Message | Role | Part type | Consumes premium request? |
+|---|---|---|---|
+| Compacted user message | `user` | `compaction` | Yes (via LLM call in `process()`) |
+| Assistant summary | `assistant` | `text` (summary) | No (`cost: 0`) |
+| Synthetic "continue" | `user` | `text` (`synthetic: true`) | No (just a text injection) |
+
+### Detecting message types in `message.updated`
+
+Use `api.state.part(messageID)` to inspect message parts:
+
+```tsx
+// In message.updated handler:
+const parts = api.state.part(msg.id!)
+
+// Detect compaction message
+const isCompaction = parts.some((p) => p.type === "compaction")
+
+// Detect synthetic "continue" message
+const isSynthetic = parts.some((p) => p.type === "text" && p.synthetic === true)
+
+// Regular user message — neither compaction nor synthetic
+```
+
+### Recommended handling for quota tracking plugins
+
+```tsx
+// message.updated: skip synthetic messages, count everything else
+if (isSynthetic) {
+  messageMultipliers.set(msg.id, 0) // track but don't count
+  return
+}
+
+// session.compacted: just refresh quota, messages are counted in message.updated
+api.event.on("session.compacted", () => {
+  fetchQuota()
+  log("session.compacted: quota refreshed")
+})
+```
+
+---
+
 ## References
 - OpenCode plugins docs: https://opencode.ai/docs/plugins/
 - OpenTUI SolidJS bindings: https://opentui.com/docs/bindings/solid
