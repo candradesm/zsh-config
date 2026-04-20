@@ -384,38 +384,71 @@ export const NotificationsPlugin = async ({ $ }: { $: typeof import("bun").$ }) 
     linux:  "complete",
   }
 
-  const soundPaths: Record<string, (name: string) => string> = {
+  const systemSoundPaths: Record<string, (name: string) => string> = {
     darwin: (name) => `/System/Library/Sounds/${name}.aiff`,
     linux:  (name) => `/usr/share/sounds/freedesktop/stereo/${name}.oga`,
   }
 
-  const getSoundPath = (name: string): string | null => {
-    const resolver = soundPaths[PLATFORM]
+  const getSystemSoundPath = (name: string): string | null => {
+    const resolver = systemSoundPaths[PLATFORM]
     return resolver ? resolver(name) : null
   }
 
-  const soundFileExists = async (name: string): Promise<boolean> => {
-    const path = getSoundPath(name)
-    if (!path) return false
+  const fileExists = async (path: string): Promise<boolean> => {
     try {
       return await Bun.file(path).exists()
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err)
-      log(`soundFileExists error: ${message}`)
+      log(`fileExists error for "${path}": ${message}`)
       return false
     }
   }
 
-  const validatedSoundName = async (name: string): Promise<string | null> => {
-    if (await soundFileExists(name)) return name
+  /**
+   * Returns true if the given string looks like a file path:
+   * absolute (/…) or home-relative (~/…).
+   */
+  const isPathLike = (s: string): boolean =>
+    s.startsWith("/") || s.startsWith("~/")
 
-    const fallback = FALLBACK_SOUNDS[PLATFORM]
-    if (fallback && await soundFileExists(fallback)) {
-      console.warn(`[NotificationsPlugin] Sound "${name}" not found, using fallback: ${fallback}`)
-      return fallback
+  /**
+   * Resolves a sound config value to an absolute file path:
+   *
+   *   1. Path given (/ or ~/) → expand ~ → check file → return path ✓
+   *      If file not found, extract basename (no extension) and continue as name.
+   *   2. Name given → check system sound → return system path ✓
+   *   3. Fall back to platform default → warn + return fallback path ✓
+   *   4. Nothing works → warn + return null (sound disabled)
+   */
+  const resolveSoundPath = async (nameOrPath: string): Promise<string | null> => {
+    let candidateName = nameOrPath
+
+    if (isPathLike(nameOrPath)) {
+      const expanded = nameOrPath.startsWith("~/")
+        ? nameOrPath.replace("~", os.homedir())
+        : nameOrPath
+
+      if (await fileExists(expanded)) return expanded
+
+      // Path given but file not found — fall through using the basename
+      const basename = expanded.split("/").filter(Boolean).pop() ?? ""
+      candidateName = basename.replace(/\.[^.]+$/, "") || nameOrPath
+      log(`resolveSoundPath: path "${expanded}" not found, trying system sound "${candidateName}"`)
     }
 
-    console.warn(`[NotificationsPlugin] Sound "${name}" not found and no fallback available, disabling sound`)
+    const systemPath = getSystemSoundPath(candidateName)
+    if (systemPath && await fileExists(systemPath)) return systemPath
+
+    const fallback = FALLBACK_SOUNDS[PLATFORM]
+    if (fallback) {
+      const fallbackPath = getSystemSoundPath(fallback)
+      if (fallbackPath && await fileExists(fallbackPath)) {
+        console.warn(`[NotificationsPlugin] Sound "${nameOrPath}" not found, using fallback: ${fallback}`)
+        return fallbackPath
+      }
+    }
+
+    console.warn(`[NotificationsPlugin] Sound "${nameOrPath}" not found and no fallback available, disabling sound`)
     return null
   }
 
@@ -429,16 +462,13 @@ export const NotificationsPlugin = async ({ $ }: { $: typeof import("bun").$ }) 
     ]
 
     if (CONFIG.soundEnabled) {
-      const soundName = await validatedSoundName(sound)
-      if (soundName) {
-        const soundPath = getSoundPath(soundName)
-        if (soundPath) {
-          tasks.push(
-            (async () => {
-              await runCommand(["afplay", soundPath])
-            })()
-          )
-        }
+      const soundPath = await resolveSoundPath(sound)
+      if (soundPath) {
+        tasks.push(
+          (async () => {
+            await runCommand(["afplay", soundPath])
+          })()
+        )
       }
     }
 
@@ -451,16 +481,13 @@ export const NotificationsPlugin = async ({ $ }: { $: typeof import("bun").$ }) 
     ]
 
     if (CONFIG.soundEnabled) {
-      const soundName = await validatedSoundName(sound)
-      if (soundName) {
-        const soundPath = getSoundPath(soundName)
-        if (soundPath) {
-          tasks.push(
-            (async () => {
-              await runCommand(["paplay", soundPath])
-            })()
-          )
-        }
+      const soundPath = await resolveSoundPath(sound)
+      if (soundPath) {
+        tasks.push(
+          (async () => {
+            await runCommand(["paplay", soundPath])
+          })()
+        )
       }
     }
 
