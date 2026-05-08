@@ -1,9 +1,10 @@
 ---
 name: opencode-plugin
-description: "CRITICAL: Load when building or debugging OpenCode plugins. Missing this = silent failures, broken hooks, and wasted hours. Covers server vs TUI plugin types, event hooks, state API, SolidJS UI slots, config loading, and deployment. Works for ANY plugin type."
+description: "CRITICAL: Load when building, modifying, updating or debugging OpenCode plugins. Missing this = silent failures, broken hooks, and wasted hours. Covers server vs TUI plugin types, event hooks, state API, SolidJS UI slots, config loading, and deployment. Works for ANY plugin type."
 ---
 
 ## When to use me
+
 - Building a new OpenCode plugin (server or TUI)
 - Debugging an existing plugin that doesn't load or behave correctly
 - Understanding the OpenCode plugin API (`api.state`, `api.client`, `api.event`, slots)
@@ -11,6 +12,7 @@ description: "CRITICAL: Load when building or debugging OpenCode plugins. Missin
 - Configuring plugin registration in `tui.json` or `opencode.json`
 
 ## Not intended for
+
 - General SolidJS development outside OpenCode
 - OpenCode SDK client usage (standalone scripts) → use SDK docs directly
 - OpenCode configuration (providers, models, themes) → use `/config`
@@ -347,20 +349,24 @@ return (
 ## Step 5 — OpenTUI components
 
 ### Layout
+
 - `<box>` — Container with `flexDirection`, `gap`, `border`, `padding`, `backgroundColor`
 - `<scrollbox>` — Scrollable container
 - `<text>` — Styled text with `fg`, `bg`, `content` props
 
 ### Text modifiers (inside `<text>`)
+
 - `<strong>`, `<b>` — Bold
 - `<em>`, `<i>` — Italic
 - `<span>` — Inline styled text
 - `<br>` — Line break
 
 ### Colors
+
 Use hex strings: `"#ffffff"`, `"#22c55e"`, `"#eab308"`, `"#ef4444"`, `"#888888"`
 
 Access theme colors via `api.theme.current`:
+
 ```tsx
 <text fg={api.theme.current?.foreground ?? "#ffffff"}>Text</text>
 <text fg={api.theme.current?.muted ?? "#888888"}>Dim text</text>
@@ -433,6 +439,7 @@ await client.app.log({
 ### Sync pattern (dotfiles repo)
 
 When maintaining plugins in a dotfiles repo, copy files to `~/.config/opencode/`:
+
 ```bash
 cp .config/opencode/plugins/*.tsx ~/.config/opencode/plugins/
 cp .config/opencode/plugins/*.js ~/.config/opencode/plugins/
@@ -443,6 +450,7 @@ cp .config/opencode/plugins/tui.json ~/.config/opencode/tui.json
 ### .gitignore
 
 Add to root `.gitignore`:
+
 ```
 .config/opencode/plugins/logs/
 ```
@@ -455,6 +463,7 @@ Add to root `.gitignore`:
 > **BusEvents** are ephemeral — they fire in real-time only and are NOT replayed for historical sessions.
 
 ### Session events (SyncEvents unless noted)
+
 ```ts
 EventSessionCreated   // { properties: { sessionID, info: Session } }
 EventSessionUpdated   // { properties: { sessionID, info: Session } }
@@ -469,6 +478,7 @@ EventSessionDiff      // { properties: { sessionID, diff: FileDiff[] } } — Bus
 `Session` has `parentID?: string` — sessions with `parentID` are subagent sessions.
 
 ### Message events (SyncEvents — all replayed on load)
+
 ```ts
 EventMessageUpdated     // { properties: { sessionID, info: UserMessage | AssistantMessage } }
 EventMessageRemoved     // { properties: { sessionID, messageID } }
@@ -478,7 +488,8 @@ EventMessagePartRemoved // { properties: { sessionID, messageID, partID } }
 
 **`EventMessageUpdated` fires for BOTH user and assistant message updates** (including streaming updates as the assistant responds). Filter by `msg.role`.
 
-#### `UserMessage` shape (from OpenCode schema — all fields):
+#### `UserMessage` shape (from OpenCode schema — all fields)
+
 ```ts
 {
   id: string           // MessageID
@@ -499,7 +510,8 @@ EventMessagePartRemoved // { properties: { sessionID, messageID, partID } }
 }
 ```
 
-#### `AssistantMessage` shape (from OpenCode schema — key fields):
+#### `AssistantMessage` shape (from OpenCode schema — key fields)
+
 ```ts
 {
   id: string           // MessageID
@@ -542,12 +554,14 @@ EventMessagePartRemoved // { properties: { sessionID, messageID, partID } }
 All parts share: `{ id: PartID, sessionID: SessionID, messageID: MessageID }`.
 
 ### Permission events
+
 ```ts
 EventPermissionAsked   // { properties: { id, permission, metadata, ... } }
 EventPermissionReplied // { properties: { ... } }
 ```
 
 ### Tool events
+
 ```ts
 EventToolExecuteBefore // { properties: { tool, sessionID, callID } }
 EventToolExecuteAfter  // { properties: { tool, sessionID, callID } }
@@ -579,6 +593,7 @@ When a session is compacted, OpenCode performs these steps (source: `packages/op
 ### Detecting message types
 
 **In `message.updated` handler** — use `api.state.part(messageID)`:
+
 ```tsx
 const parts = api.state.part(msg.id!) ?? []
 
@@ -593,6 +608,7 @@ const isSynthetic = isSyntheticMessage(parts)
 ```
 
 Where `isSyntheticMessage` must be defined as:
+
 ```tsx
 function isSyntheticMessage(parts: Part[]): boolean {
   // Compaction user messages have a "compaction" part — never synthetic
@@ -606,6 +622,7 @@ function isSyntheticMessage(parts: Part[]): boolean {
 ```
 
 **In `fetchSessionUsage` (load path)** — use `item.parts` from `api.client.session.messages()`:
+
 ```tsx
 // api.client.session.messages() returns { info: Message, parts: Part[] }[]
 // parts are available directly — no separate api.state.part() call needed
@@ -749,9 +766,10 @@ Yes. The compaction user message has `UserMessage.model` set just like any other
 ---
 
 ## References
-- OpenCode plugins docs: https://opencode.ai/docs/plugins/
-- OpenTUI SolidJS bindings: https://opentui.com/docs/bindings/solid
-- OpenTUI slots: https://opentui.com/docs/plugins/slots
+
+- OpenCode plugins docs: <https://opencode.ai/docs/plugins/>
+- OpenTUI SolidJS bindings: <https://opentui.com/docs/bindings/solid>
+- OpenTUI slots: <https://opentui.com/docs/plugins/slots>
 - SDK type definitions: `@opencode-ai/sdk/v2` types
 - TUI plugin types: `@opencode-ai/plugin/tui` types
 - Real examples: this repo's `.config/opencode/plugins/copilot-usage.tsx` and `notifications.js`

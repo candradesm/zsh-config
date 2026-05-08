@@ -6,7 +6,7 @@ import { mkdirSync, appendFileSync } from "node:fs"
 
 const QUOTA_REFRESH_MS = 5 * 60 * 1000
 const MAX_POLL_ATTEMPTS = 30
-const PLUGIN_VERSION = "v18-fix-synthetic-detection"
+const PLUGIN_VERSION = "v19-fix-subagent-compaction"
 
 interface CopilotConfig {
   modelMultipliers: Record<string, number>
@@ -314,6 +314,11 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
         const msgId = item.id ?? (item.info as any)?.id ?? (item as any)?.messageID ?? (item as any)?.uid
         log("fetchSessionUsage: checking msg id:", msgId, "role:", item.info?.role)
         if (item.info?.role === "user" && msgId) {
+          // Skip messages from subagent sessions (compaction in a child session is a tool call, not a premium request)
+          if (item.info?.sessionID && item.info.sessionID !== sessionID) {
+            log("fetchSessionUsage: skipping subagent message", msgId, "sessionID:", item.info.sessionID)
+            continue
+          }
           const parts = ((item as any).parts ?? []) as MessagePart[]
           // Read model directly from UserMessage.model (providerID/modelID nested object)
           const infoModel = (item.info as any)?.model
@@ -492,20 +497,26 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
           lastModel = getActiveModel(props.api, sessionID)
         }
         const parts = (props.api.state.part(msg.id!) ?? []) as MessagePart[]
+        if (parts.some((p) => p.type === "compaction")) {
+          log("message.updated: compaction message detected", msg.id, "sessionID:", (event as EventMessageUpdated).properties.sessionID)
+        }
         const isFreePlan = quotaInfo()?.planType === "free"
         const multiplier = calculateMessageMultiplier(msg.id!, parts, lastModel, isFreePlan, config(), messageMultipliers)
         if (multiplier > 0) {
           setSessionUsage((prev) => roundUsage(prev + multiplier))
+          fetchQuota()
         }
       } catch (err) {
         log("message.updated handler error:", String(err))
       }
     })
 
-    const unsubCompacted = props.api.event.on("session.compacted", () => {
+    const unsubCompacted = props.api.event.on("session.compacted", (evt) => {
+      // Ignore compaction events from subagent sessions
+      if ((evt as any).properties?.sessionID !== sessionID) return
       // Compaction messages are counted in message.updated; synthetic ones skipped via flag
       fetchQuota()
-      log("session.compacted: quota refreshed")
+      log("session.compacted: quota refreshed, sessionID:", sessionID)
     })
 
     const refreshInterval = setInterval(() => {
