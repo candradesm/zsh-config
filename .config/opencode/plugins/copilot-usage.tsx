@@ -10,8 +10,6 @@ const PLUGIN_VERSION = "v31"
 
 interface TokenPrice {
   input: number
-  cachedInput?: number
-  cacheWrite?: number
   output: number
 }
 
