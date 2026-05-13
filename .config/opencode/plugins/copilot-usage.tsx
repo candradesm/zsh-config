@@ -10,6 +10,7 @@ const PLUGIN_VERSION = "v31"
 
 interface TokenPrice {
   input: number
+  cacheRead?: number
   output: number
 }
 
@@ -328,7 +329,7 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
 
   const messageMultipliers = new Map<string, number>()
   // Maps messageID → last seen token snapshot for delta calculation
-  const processedAssistantMessages = new Map<string, { input: number; output: number }>()
+  const processedAssistantMessages = new Map<string, { input: number; cacheRead: number; output: number }>()
   const trackedSessions = new Set<string>()
   let loadedSessionID: string | null = null
   let loadedTokenRootSessionID: string | null = null
@@ -484,22 +485,24 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
 
         const info = item.info as any
         const inputTok: number = info?.tokens?.input ?? 0
+        const cacheReadTok: number = info?.tokens?.cache?.read ?? 0
         const outputTok: number = info?.tokens?.output ?? 0
-        if (inputTok === 0 && outputTok === 0) continue
+        if (inputTok === 0 && cacheReadTok === 0 && outputTok === 0) continue
 
-        const prevSnapshot = processedAssistantMessages.get(msgId) ?? { input: 0, output: 0 }
+        const prevSnapshot = processedAssistantMessages.get(msgId) ?? { input: 0, cacheRead: 0, output: 0 }
         const deltaInput = Math.max(0, inputTok - prevSnapshot.input)
+        const deltaCacheRead = Math.max(0, cacheReadTok - prevSnapshot.cacheRead)
         const deltaOutput = Math.max(0, outputTok - prevSnapshot.output)
-        if (deltaInput === 0 && deltaOutput === 0) continue
+        if (deltaInput === 0 && deltaCacheRead === 0 && deltaOutput === 0) continue
 
-        processedAssistantMessages.set(msgId, { input: inputTok, output: outputTok })
+        processedAssistantMessages.set(msgId, { input: inputTok, cacheRead: cacheReadTok, output: outputTok })
         const modelId: string = info?.modelID ?? ""
         const price = getTokenPrice(modelId, cfg)
 
-        setTotalInputTokens((prev) => prev + deltaInput)
+        setTotalInputTokens((prev) => prev + deltaInput + deltaCacheRead)
         setTotalOutputTokens((prev) => prev + deltaOutput)
         if (price) {
-          setTotalInputCost((prev) => prev + calcCost(deltaInput, price.input))
+          setTotalInputCost((prev) => prev + calcCost(deltaInput, price.input) + calcCost(deltaCacheRead, price.cacheRead ?? 0))
           setTotalOutputCost((prev) => prev + calcCost(deltaOutput, price.output))
         }
       }
@@ -666,19 +669,21 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
           const msgId = msg?.id
           if (msgId) {
             const inputTok: number = (msg as any)?.tokens?.input ?? 0
+            const cacheReadTok: number = (msg as any)?.tokens?.cache?.read ?? 0
             const outputTok: number = (msg as any)?.tokens?.output ?? 0
-            if (inputTok > 0 || outputTok > 0) {
-              const prevSnapshot = processedAssistantMessages.get(msgId) ?? { input: 0, output: 0 }
+            if (inputTok > 0 || cacheReadTok > 0 || outputTok > 0) {
+              const prevSnapshot = processedAssistantMessages.get(msgId) ?? { input: 0, cacheRead: 0, output: 0 }
               const deltaInput = Math.max(0, inputTok - prevSnapshot.input)
+              const deltaCacheRead = Math.max(0, cacheReadTok - prevSnapshot.cacheRead)
               const deltaOutput = Math.max(0, outputTok - prevSnapshot.output)
-              if (deltaInput > 0 || deltaOutput > 0) {
-                processedAssistantMessages.set(msgId, { input: inputTok, output: outputTok })
+              if (deltaInput > 0 || deltaCacheRead > 0 || deltaOutput > 0) {
+                processedAssistantMessages.set(msgId, { input: inputTok, cacheRead: cacheReadTok, output: outputTok })
                 const modelId: string = (msg as any)?.modelID ?? ""
                 const price = getTokenPrice(modelId, config())
-                setTotalInputTokens((prev) => prev + deltaInput)
+                setTotalInputTokens((prev) => prev + deltaInput + deltaCacheRead)
                 setTotalOutputTokens((prev) => prev + deltaOutput)
                 if (price) {
-                  setTotalInputCost((prev) => prev + calcCost(deltaInput, price.input))
+                  setTotalInputCost((prev) => prev + calcCost(deltaInput, price.input) + calcCost(deltaCacheRead, price.cacheRead ?? 0))
                   setTotalOutputCost((prev) => prev + calcCost(deltaOutput, price.output))
                 }
               }
