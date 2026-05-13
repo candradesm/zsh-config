@@ -6,10 +6,11 @@ import { mkdirSync, appendFileSync } from "node:fs"
 
 const QUOTA_REFRESH_MS = 5 * 60 * 1000
 const MAX_POLL_ATTEMPTS = 30
-const PLUGIN_VERSION = "v31"
+const PLUGIN_VERSION = "v33"
 
 interface TokenPrice {
   input: number
+  cacheRead?: number
   output: number
 }
 
@@ -320,15 +321,17 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
   const [quotaLoading, setQuotaLoading] = createSignal<boolean>(false)
   const [activeModel, setActiveModel] = createSignal<string | null>(null)
   const [sessionLoading, setSessionLoading] = createSignal<boolean>(false)
-  const [totalInputTokens, setTotalInputTokens] = createSignal<number>(0)
+  const [peakInputTokens, setPeakInputTokens] = createSignal<number>(0)
   const [totalOutputTokens, setTotalOutputTokens] = createSignal<number>(0)
   const [totalInputCost, setTotalInputCost] = createSignal<number>(0)
   const [totalOutputCost, setTotalOutputCost] = createSignal<number>(0)
   const [configLoaded, setConfigLoaded] = createSignal<boolean>(false)
 
   const messageMultipliers = new Map<string, number>()
-  // Maps messageID → last seen token snapshot for delta calculation
-  const processedAssistantMessages = new Map<string, { input: number; output: number }>()
+  // Maps messageID → last seen token snapshot for delta calculation (cost billing)
+  const processedAssistantMessages = new Map<string, { input: number; cacheRead: number; output: number }>()
+  // Maps sessionID → peak context window (input + cacheRead) ever seen in that session (for ↑ display)
+  const peakPerSession = new Map<string, number>()
   const trackedSessions = new Set<string>()
   let loadedSessionID: string | null = null
   let loadedTokenRootSessionID: string | null = null
@@ -456,14 +459,32 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
   function resetTokenTracking(sessionID: string, cfg: CopilotConfig) {
     tokenLoadGeneration++
     processedAssistantMessages.clear()
+    peakPerSession.clear()
     trackedSessions.clear()
     loadedAllSessionsForRoot = null
-    setTotalInputTokens(0)
+    setPeakInputTokens(0)
     setTotalOutputTokens(0)
     setTotalInputCost(0)
     setTotalOutputCost(0)
     loadedTokenRootSessionID = sessionID
     tokenConfigSnapshot = cfg
+  }
+
+  // Track peak context size (input + cacheRead + output) per session.
+  // `tokens.cache.read` is the full cached context re-sent every API call — summing across all
+  // calls inflates the count (e.g. 514k for a 53k conversation).  Instead, we record the
+  // maximum full-call token count (input + cacheRead + output) per session and sum those peaks
+  // across sessions. Including output in the peak makes the ↑ figure match the OpenCode context
+  // bar (which shows total conversation size including the last response).
+  // Cost calculation is unchanged — it still accumulates all billable deltas correctly.
+  function updatePeakContext(sessionId: string, inputTok: number, cacheReadTok: number, outputTok: number) {
+    const contextSize = inputTok + cacheReadTok + outputTok
+    const prev = peakPerSession.get(sessionId) ?? 0
+    if (contextSize > prev) {
+      const delta = contextSize - prev
+      peakPerSession.set(sessionId, contextSize)
+      setPeakInputTokens((p) => p + delta)
+    }
   }
 
   async function loadSessionTokens(sessionID: string, cfg: CopilotConfig) {
@@ -484,22 +505,24 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
 
         const info = item.info as any
         const inputTok: number = info?.tokens?.input ?? 0
+        const cacheReadTok: number = info?.tokens?.cache?.read ?? 0
         const outputTok: number = info?.tokens?.output ?? 0
-        if (inputTok === 0 && outputTok === 0) continue
+        if (inputTok === 0 && cacheReadTok === 0 && outputTok === 0) continue
 
-        const prevSnapshot = processedAssistantMessages.get(msgId) ?? { input: 0, output: 0 }
+        const prevSnapshot = processedAssistantMessages.get(msgId) ?? { input: 0, cacheRead: 0, output: 0 }
         const deltaInput = Math.max(0, inputTok - prevSnapshot.input)
+        const deltaCacheRead = Math.max(0, cacheReadTok - prevSnapshot.cacheRead)
         const deltaOutput = Math.max(0, outputTok - prevSnapshot.output)
-        if (deltaInput === 0 && deltaOutput === 0) continue
+        if (deltaInput === 0 && deltaCacheRead === 0 && deltaOutput === 0) continue
 
-        processedAssistantMessages.set(msgId, { input: inputTok, output: outputTok })
+        processedAssistantMessages.set(msgId, { input: inputTok, cacheRead: cacheReadTok, output: outputTok })
         const modelId: string = info?.modelID ?? ""
         const price = getTokenPrice(modelId, cfg)
 
-        setTotalInputTokens((prev) => prev + deltaInput)
+        updatePeakContext(sessionID, inputTok, cacheReadTok, outputTok)
         setTotalOutputTokens((prev) => prev + deltaOutput)
         if (price) {
-          setTotalInputCost((prev) => prev + calcCost(deltaInput, price.input))
+          setTotalInputCost((prev) => prev + calcCost(deltaInput, price.input) + calcCost(deltaCacheRead, price.cacheRead ?? 0))
           setTotalOutputCost((prev) => prev + calcCost(deltaOutput, price.output))
         }
       }
@@ -666,19 +689,21 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
           const msgId = msg?.id
           if (msgId) {
             const inputTok: number = (msg as any)?.tokens?.input ?? 0
+            const cacheReadTok: number = (msg as any)?.tokens?.cache?.read ?? 0
             const outputTok: number = (msg as any)?.tokens?.output ?? 0
-            if (inputTok > 0 || outputTok > 0) {
-              const prevSnapshot = processedAssistantMessages.get(msgId) ?? { input: 0, output: 0 }
+            if (inputTok > 0 || cacheReadTok > 0 || outputTok > 0) {
+              const prevSnapshot = processedAssistantMessages.get(msgId) ?? { input: 0, cacheRead: 0, output: 0 }
               const deltaInput = Math.max(0, inputTok - prevSnapshot.input)
+              const deltaCacheRead = Math.max(0, cacheReadTok - prevSnapshot.cacheRead)
               const deltaOutput = Math.max(0, outputTok - prevSnapshot.output)
-              if (deltaInput > 0 || deltaOutput > 0) {
-                processedAssistantMessages.set(msgId, { input: inputTok, output: outputTok })
+              if (deltaInput > 0 || deltaCacheRead > 0 || deltaOutput > 0) {
+                processedAssistantMessages.set(msgId, { input: inputTok, cacheRead: cacheReadTok, output: outputTok })
                 const modelId: string = (msg as any)?.modelID ?? ""
                 const price = getTokenPrice(modelId, config())
-                setTotalInputTokens((prev) => prev + deltaInput)
+                updatePeakContext(evtSID, inputTok, cacheReadTok, outputTok)
                 setTotalOutputTokens((prev) => prev + deltaOutput)
                 if (price) {
-                  setTotalInputCost((prev) => prev + calcCost(deltaInput, price.input))
+                  setTotalInputCost((prev) => prev + calcCost(deltaInput, price.input) + calcCost(deltaCacheRead, price.cacheRead ?? 0))
                   setTotalOutputCost((prev) => prev + calcCost(deltaOutput, price.output))
                 }
               }
@@ -772,7 +797,7 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
           {isActiveModelDeprecated() && (
             <text fg="#ef4444">⚠ Model deprecated</text>
           )}
-          <text fg="#ffffff">{formatCostLine("↑", totalInputTokens(), totalInputCost())}</text>
+          <text fg="#ffffff">{formatCostLine("↑", peakInputTokens(), totalInputCost())}</text>
           <text fg="#ffffff">{formatCostLine("↓", totalOutputTokens(), totalOutputCost())}</text>
           <text fg={props.api.theme.current?.foreground ?? "#ffffff"}>
             {"Total".padEnd(26) + "$" + (totalInputCost() + totalOutputCost()).toFixed(2)}
