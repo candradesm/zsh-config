@@ -6,7 +6,7 @@ import { mkdirSync, appendFileSync } from "node:fs"
 
 const QUOTA_REFRESH_MS = 5 * 60 * 1000
 const MAX_POLL_ATTEMPTS = 30
-const PLUGIN_VERSION = "v31"
+const PLUGIN_VERSION = "v32"
 
 interface TokenPrice {
   input: number
@@ -321,15 +321,17 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
   const [quotaLoading, setQuotaLoading] = createSignal<boolean>(false)
   const [activeModel, setActiveModel] = createSignal<string | null>(null)
   const [sessionLoading, setSessionLoading] = createSignal<boolean>(false)
-  const [totalInputTokens, setTotalInputTokens] = createSignal<number>(0)
+  const [peakInputTokens, setPeakInputTokens] = createSignal<number>(0)
   const [totalOutputTokens, setTotalOutputTokens] = createSignal<number>(0)
   const [totalInputCost, setTotalInputCost] = createSignal<number>(0)
   const [totalOutputCost, setTotalOutputCost] = createSignal<number>(0)
   const [configLoaded, setConfigLoaded] = createSignal<boolean>(false)
 
   const messageMultipliers = new Map<string, number>()
-  // Maps messageID → last seen token snapshot for delta calculation
+  // Maps messageID → last seen token snapshot for delta calculation (cost billing)
   const processedAssistantMessages = new Map<string, { input: number; cacheRead: number; output: number }>()
+  // Maps sessionID → peak context window (input + cacheRead) ever seen in that session (for ↑ display)
+  const peakPerSession = new Map<string, number>()
   const trackedSessions = new Set<string>()
   let loadedSessionID: string | null = null
   let loadedTokenRootSessionID: string | null = null
@@ -457,14 +459,30 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
   function resetTokenTracking(sessionID: string, cfg: CopilotConfig) {
     tokenLoadGeneration++
     processedAssistantMessages.clear()
+    peakPerSession.clear()
     trackedSessions.clear()
     loadedAllSessionsForRoot = null
-    setTotalInputTokens(0)
+    setPeakInputTokens(0)
     setTotalOutputTokens(0)
     setTotalInputCost(0)
     setTotalOutputCost(0)
     loadedTokenRootSessionID = sessionID
     tokenConfigSnapshot = cfg
+  }
+
+  // Track peak context size (input + cacheRead) per session.
+  // `tokens.cache.read` is the full cached context re-sent every API call — summing across all
+  // calls inflates the count (e.g. 514k for a 53k conversation).  Instead, we record the
+  // maximum context window ever used per session and sum those peaks across sessions.
+  // Cost calculation is unchanged — it still accumulates all billable deltas correctly.
+  function updatePeakContext(sessionId: string, inputTok: number, cacheReadTok: number) {
+    const contextSize = inputTok + cacheReadTok
+    const prev = peakPerSession.get(sessionId) ?? 0
+    if (contextSize > prev) {
+      const delta = contextSize - prev
+      peakPerSession.set(sessionId, contextSize)
+      setPeakInputTokens((p) => p + delta)
+    }
   }
 
   async function loadSessionTokens(sessionID: string, cfg: CopilotConfig) {
@@ -499,7 +517,7 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
         const modelId: string = info?.modelID ?? ""
         const price = getTokenPrice(modelId, cfg)
 
-        setTotalInputTokens((prev) => prev + deltaInput + deltaCacheRead)
+        updatePeakContext(sessionID, inputTok, cacheReadTok)
         setTotalOutputTokens((prev) => prev + deltaOutput)
         if (price) {
           setTotalInputCost((prev) => prev + calcCost(deltaInput, price.input) + calcCost(deltaCacheRead, price.cacheRead ?? 0))
@@ -680,7 +698,7 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
                 processedAssistantMessages.set(msgId, { input: inputTok, cacheRead: cacheReadTok, output: outputTok })
                 const modelId: string = (msg as any)?.modelID ?? ""
                 const price = getTokenPrice(modelId, config())
-                setTotalInputTokens((prev) => prev + deltaInput + deltaCacheRead)
+                updatePeakContext(evtSID, inputTok, cacheReadTok)
                 setTotalOutputTokens((prev) => prev + deltaOutput)
                 if (price) {
                   setTotalInputCost((prev) => prev + calcCost(deltaInput, price.input) + calcCost(deltaCacheRead, price.cacheRead ?? 0))
@@ -777,7 +795,7 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
           {isActiveModelDeprecated() && (
             <text fg="#ef4444">⚠ Model deprecated</text>
           )}
-          <text fg="#ffffff">{formatCostLine("↑", totalInputTokens(), totalInputCost())}</text>
+          <text fg="#ffffff">{formatCostLine("↑", peakInputTokens(), totalInputCost())}</text>
           <text fg="#ffffff">{formatCostLine("↓", totalOutputTokens(), totalOutputCost())}</text>
           <text fg={props.api.theme.current?.foreground ?? "#ffffff"}>
             {"Total".padEnd(26) + "$" + (totalInputCost() + totalOutputCost()).toFixed(2)}
