@@ -6,7 +6,7 @@ import { mkdirSync, appendFileSync } from "node:fs"
 
 const QUOTA_REFRESH_MS = 5 * 60 * 1000
 const MAX_POLL_ATTEMPTS = 30
-const PLUGIN_VERSION = "v31-debug"
+const PLUGIN_VERSION = "v31"
 
 interface TokenPrice {
   input: number
@@ -35,7 +35,7 @@ interface MessagePart {
   synthetic?: boolean
 }
 
-const DEBUG = true
+const DEBUG = process.env.OPENCODE_COPILOT_DEBUG === "true"
 const logsDir = new URL("./logs", import.meta.url).pathname
 const logPath = new URL(`./logs/log_copilot_plugin_${Date.now()}.log`, import.meta.url).pathname
 if (DEBUG) mkdirSync(logsDir, { recursive: true })
