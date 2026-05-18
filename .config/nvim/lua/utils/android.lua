@@ -5,6 +5,52 @@ local M = {}
 
 local gradle = require("utils.gradle")
 
+local function libs_versions_has_android_plugin(filepath)
+  if vim.fn.filereadable(filepath) ~= 1 then
+    return false
+  end
+
+  local ok, lines = pcall(vim.fn.readfile, filepath)
+  if not ok or not lines then
+    return false
+  end
+
+  local current_section = nil
+  for _, line in ipairs(lines) do
+    local section = line:match("^%s*%[([^%]]+)%]")
+    if section then
+      current_section = section
+    elseif current_section == "versions" then
+      if line:match("^%s*agp%s*=") then
+        return true
+      end
+    elseif current_section == "plugins" then
+      if line:match("com%.android%.application") or line:match("com%.android%.library") then
+        return true
+      end
+    end
+  end
+
+  return false
+end
+
+local function has_android_manifest_in_submodule(root)
+  local manifest_patterns = {
+    "*/src/main/AndroidManifest.xml",
+    "*/*/src/main/AndroidManifest.xml",
+    "*/*/*/src/main/AndroidManifest.xml",
+  }
+
+  for _, pattern in ipairs(manifest_patterns) do
+    local matches = vim.fn.glob(root .. "/" .. pattern, false, true)
+    if #matches > 0 then
+      return true
+    end
+  end
+
+  return false
+end
+
 -- ============================================================================
 -- SDK DETECTION
 -- ============================================================================
@@ -120,6 +166,16 @@ function M.is_android_project(filepath)
     if vim.fn.filereadable(indicator) == 1 or vim.fn.isdirectory(indicator) == 1 then
       return true
     end
+  end
+
+  -- Check version catalog for Android Gradle Plugin references
+  if libs_versions_has_android_plugin(root .. "/gradle/libs.versions.toml") then
+    return true
+  end
+
+  -- Check common multi-module Android manifest locations
+  if has_android_manifest_in_submodule(root) then
+    return true
   end
 
   -- Check if build.gradle references Android plugin

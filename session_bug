@@ -1,0 +1,934 @@
+# PR review and improvement suggestions
+
+**Session ID:** ses_1e9622425ffeccUaXIrjCYpFlM
+**Created:** 5/11/2026, 12:38:24 PM
+**Updated:** 5/11/2026, 12:40:09 PM
+
+---
+
+## User
+
+hi, could review this pr https://github.com/inditex/mob-zaraappandroid/pull/21869 and tell me what could i make better. be critic
+
+---
+
+## Assistant (Plan · Claude Opus 4.6 · 11.5s)
+
+_Thinking:_
+
+The user wants me to review a PR. Let me fetch the PR details first.
+
+Hey there! 🐵 Let me swing over to that PR and take a good look at it for you! Let me grab the details first.
+
+**Tool: github_pull_request_read**
+
+**Input:**
+```json
+{
+  "method": "get",
+  "owner": "inditex",
+  "repo": "mob-zaraappandroid",
+  "pullNumber": 21869
+}
+```
+
+**Output:**
+```
+{"number":21869,"title":"[CATALOGO-40786] Updated PDP Recom\u0026#39;s navigation to PDPCoordinator","body":"\n  💬 Chatbot Commands Examples (https://zaraappandroid.docs.inditex.dev/cicd/chatbot.html)\n  \n```bash\n# Appetize GMS build for BetaProdDebug\n/deploy-mobile --env des --build app-zara-gms:assembleBetaProdDebug --platform appetize\n\n# Appetize,Applivery GMS build for BetaProdDebug\n/deploy-mobile --env des --build app-zara-gms:assembleBetaProdDebug --platform appetize,applivery\n\n# Appetize GMS build for BetaProdRelease\n/deploy-mobile --env des --build app-zara-gms:assembleBetaProdRelease --platform appetize\n\n# Appetize HMS build for BetaProdDebug\n/deploy-mobile --env des --build app-zara-hms:assembleBetaProdDebug --platform appetize\n\n# Appetize HMS build for BetaProdRelease\n/deploy-mobile --env des --build app-zara-hms:assembleBetaProdRelease --platform appetize\n\n```\n\n\n\n  \u003ch1\u003e🚀 Pull Request Time!\u003c/h1\u003e\n\n\n\u003cbr\u003e\n\n**JIRA**\n\n[🎫 CATALOGO-40786](https://axinic.central.inditex.grp/jira/browse/CATALOGO-40786)\n\n**Summary/Description**\n\nUpdated PDP Recom\u0026#39;s navigation to PDP Coordinator, created a new PDPRecomDispatcher and removed pdp recom\u0026#39;s logic from legacy dispatcher.\n","state":"open","draft":false,"merged":false,"mergeable_state":"clean","html_url":"https://github.com/inditex/mob-zaraappandroid/pull/21869","user":{"login":"candradesm","id":142391796,"profile_url":"https://github.com/candradesm","avatar_url":"https://avatars.githubusercontent.com/u/142391796?v=4"},"labels":["kind/feature","size/L","CATALOGO","AI-Coded"],"assignees":["candradesm"],"head":{"ref":"feature/CATALOGO-40786-open-pdp-recom-from-coordinator","sha":"e66ddc741947efbe348490eca84b4a983ef0ea40","repo":{"full_name":"inditex/mob-zaraappandroid","description":"ZARA.COM Android Mobile App"}},"base":{"ref":"main","sha":"d3f9932c2a2ec6a85a968ee39b4059b1e6dd75a9","repo":{"full_name":"inditex/mob-zaraappandroid","description":"ZARA.COM Android Mobile App"}},"additions":258,"deletions":72,"changed_files":8,"commits":1,"comments":5,"created_at":"2026-05-08T12:39:02Z","updated_at":"2026-05-11T09:05:30Z"}
+```
+
+**Tool: github_pull_request_read**
+
+**Input:**
+```json
+{
+  "method": "get_files",
+  "owner": "inditex",
+  "repo": "mob-zaraappandroid",
+  "pullNumber": 21869,
+  "perPage": 100
+}
+```
+
+**Output:**
+```
+[{"filename":"code/ecom-features/pdp/src/main/kotlin/com/inditex/ecom/features/pdp/api/ProductDetailDispatcher.kt","status":"modified","additions":18,"deletions":53,"changes":71,"patch":"@@ -2,10 +2,7 @@ package com.inditex.ecom.features.pdp.api\n \n import android.content.Context\n import android.content.Intent\n-import com.inditex.ecom.features.pdp.domain.usecases.IsProductDetailRecomEnabledUseCase\n-import com.inditex.ecom.features.pdp.ui.activity.GIFT_CARD_PRODUCT_BUNDLE_KEY\n import com.inditex.ecom.features.pdp.ui.activity.ProductDetailFlowActivity\n-import com.inditex.ecom.features.pdp.ui.activity.ProductDetailRecomActivity\n import com.inditex.ecom.features.pdp.ui.helper.ProductDetailProvider\n import com.inditex.ecom.features.pdp.ui.productpage.model.SimpleProductPDPUIModel\n import com.inditex.trackingdataservice.model.TrackingProductOrigin\n@@ -17,14 +14,12 @@ import com.inditex.zara.domain.models.UserOrderItemContextModel\n import com.inditex.zara.domain.models.catalog.CategoryType\n import com.inditex.zara.domain.models.catalog.product.ProductModel\n import com.inditex.zara.domain.models.physicalstores.details.PhysicalStoreDetailsModel\n-import com.inditex.zara.domain.models.catalog.product.ProductType\n import com.inditex.zara.domain.providers.TrackingProvider\n import java.io.Serializable\n \n class ProductDetailDispatcher(\n     private val trackingProvider: TrackingProvider,\n-    private val productDetailProvider: ProductDetailProvider,\n-    private val isProductDetailRecomEnabledUseCase: IsProductDetailRecomEnabledUseCase\n+    private val productDetailProvider: ProductDetailProvider\n ) {\n \n     fun open(\n@@ -45,33 +40,22 @@ class ProductDetailDispatcher(\n     ) {\n         trackingProvider.currentProductViewPagerAnalyticsContexts =\n             orderItemContexts.map { it.analyticsContext }\n-        val currentProduct = simpleProducts[(position?.minus(1)?.takeUnless { it \u003c 0 }) ?: 0]\n-        val isPdpRecomEnabled = isProductDetailRecomEnabledUseCase()\n-        val shouldOpenPdpRecom = isPdpRecomEnabled \u0026\u0026 currentProduct.kind in listOf(\n-            ProductModel.Kind.GIFTCARD,\n-            ProductModel.Kind.VGIFTCARD\n-        ) \u0026\u0026 currentProduct.type == ProductType.BUNDLE\n-        if (shouldOpenPdpRecom) {\n-            openRecomProductDetail(context = context, currentProduct = currentProduct)\n-        } else {\n-            openNativeProductDetail(\n-                simpleProducts = simpleProducts,\n-                context = context,\n-                position = position,\n-                origin = origin,\n-                colorsMap = colorsMap,\n-                scannedProductId = scannedProductId,\n-                orderItemContexts = orderItemContexts,\n-                gridParentId = gridParentId,\n-                relatedProductOrigin = relatedProductOrigin,\n-                searchComponent = searchComponent,\n-                isCarouselEnabled = isCarouselEnabled,\n-                isFromRelatedNavigation = isFromRelatedNavigation,\n-                isPdpRecomEnabled = isPdpRecomEnabled,\n-                physicalStoreId = physicalStoreId,\n-                extendedStore = extendedStore\n-            )\n-        }\n+        openNativeProductDetail(\n+            simpleProducts = simpleProducts,\n+            context = context,\n+            position = position,\n+            origin = origin,\n+            colorsMap = colorsMap,\n+            scannedProductId = scannedProductId,\n+            orderItemContexts = orderItemContexts,\n+            gridParentId = gridParentId,\n+            relatedProductOrigin = relatedProductOrigin,\n+            searchComponent = searchComponent,\n+            isCarouselEnabled = isCarouselEnabled,\n+            isFromRelatedNavigation = isFromRelatedNavigation,\n+            physicalStoreId = physicalStoreId,\n+            extendedStore = extendedStore\n+        )\n     }\n \n     private fun openNativeProductDetail(\n@@ -87,18 +71,10 @@ class ProductDetailDispatcher(\n         searchComponent: String?,\n         isCarouselEnabled: Boolean,\n         isFromRelatedNavigation: Boolean,\n-        isPdpRecomEnabled: Boolean,\n         physicalStoreId: Long?,\n         extendedStore: PhysicalStoreDetailsModel?\n     ) {\n-        val filteredSimpleProducts = if (isPdpRecomEnabled) {\n-            simpleProducts.filterNot {\n-                it.kind in listOf(ProductModel.Kind.GIFTCARD, ProductModel.Kind.VGIFTCARD) \u0026\u0026 it.type == ProductType.BUNDLE\n-            }\n-        } else {\n-            simpleProducts\n-        }\n-        productDetailProvider.addSimpleProducts(filteredSimpleProducts)\n+        productDetailProvider.addSimpleProducts(simpleProducts)\n         context?.createIntent(\n             position = position,\n             origin = origin,\n@@ -115,17 +91,6 @@ class ProductDetailDispatcher(\n         )?.let(context::startActivity)\n     }\n \n-    private fun openRecomProductDetail(\n-        context: Context?,\n-        currentProduct: SimpleProductPDPUIModel\n-    ) {\n-        context?.let {\n-            Intent(it, ProductDetailRecomActivity::class.java).apply {\n-                putExtra(GIFT_CARD_PRODUCT_BUNDLE_KEY, currentProduct)\n-            }.let(context::startActivity)\n-        }\n-    }\n-\n     private fun Context.createIntent(\n         position: Int? = null,\n         origin: AnalyticsOriginContainer? = null,"},{"filename":"code/ecom-features/pdp/src/main/kotlin/com/inditex/ecom/features/pdp/api/ProductDetailRecomDispatcher.kt","status":"added","additions":16,"changes":16,"patch":"@@ -0,0 +1,16 @@\n+package com.inditex.ecom.features.pdp.api\n+\n+import android.content.Context\n+import android.content.Intent\n+import com.inditex.ecom.features.pdp.ui.activity.GIFT_CARD_PRODUCT_BUNDLE_KEY\n+import com.inditex.ecom.features.pdp.ui.activity.ProductDetailRecomActivity\n+import com.inditex.ecom.features.pdp.ui.productpage.model.SimpleProductPDPUIModel\n+\n+class ProductDetailRecomDispatcher {\n+\n+    fun open(context: Context, product: SimpleProductPDPUIModel) {\n+        Intent(context, ProductDetailRecomActivity::class.java).apply {\n+            putExtra(GIFT_CARD_PRODUCT_BUNDLE_KEY, product)\n+        }.let(context::startActivity)\n+    }\n+}"},{"filename":"code/ecom-features/pdp/src/test/kotlin/com/inditex/ecom/features/pdp/api/ProductDetailRecomDispatcherTest.kt","status":"added","additions":27,"changes":27,"patch":"@@ -0,0 +1,27 @@\n+package com.inditex.ecom.features.pdp.api\n+\n+import android.content.Context\n+import com.inditex.ecom.features.pdp.ui.productpage.model.SimpleProductPDPUIModel\n+import io.mockk.justRun\n+import io.mockk.mockk\n+import io.mockk.verify\n+import org.junit.Test\n+\n+class ProductDetailRecomDispatcherTest {\n+\n+    private val context: Context = mockk()\n+    private val dispatcher = ProductDetailRecomDispatcher()\n+\n+    @Test\n+    fun `GIVEN a product WHEN open is called THEN startActivity is called`() {\n+        // Given\n+        justRun { context.startActivity(any()) }\n+        val product = SimpleProductPDPUIModel(productId = 1L)\n+\n+        // When\n+        dispatcher.open(context = context, product = product)\n+\n+        // Then\n+        verify(exactly = 1) { context.startActivity(any()) }\n+    }\n+}"},{"filename":"code/ecom-features/pdp/src/test/kotlin/com/inditex/ecom/features/pdp/ui/ProductDetailDispatcherTest.kt","status":"modified","additions":1,"deletions":6,"changes":7,"patch":"@@ -1,14 +1,12 @@\n package com.inditex.ecom.features.pdp.ui\n \n import android.content.Context\n-import com.inditex.ecom.features.pdp.domain.usecases.IsProductDetailRecomEnabledUseCase\n import com.inditex.ecom.features.pdp.api.ProductDetailDispatcher\n import com.inditex.ecom.features.pdp.ui.helper.ProductDetailProvider\n import com.inditex.ecom.features.pdp.ui.productpage.mapper.toSimpleProductPDP\n import com.inditex.ecom.features.pdp.ui.productpage.model.SimpleProductPDPUIModel\n import com.inditex.zara.domain.models.catalog.product.ProductModel\n import com.inditex.zara.domain.providers.TrackingProvider\n-import io.mockk.every\n import io.mockk.justRun\n import io.mockk.mockk\n import io.mockk.verify\n@@ -21,11 +19,9 @@ class ProductDetailDispatcherTest {\n     companion object {\n         private val trackingProvider = TrackingProvider(mockk())\n         private val productDetailProvider = ProductDetailProvider()\n-        private val isProductDetailRecomEnabledUseCase: IsProductDetailRecomEnabledUseCase = mockk()\n         private val dispatcher = ProductDetailDispatcher(\n             trackingProvider = trackingProvider,\n-            productDetailProvider = productDetailProvider,\n-            isProductDetailRecomEnabledUseCase = isProductDetailRecomEnabledUseCase\n+            productDetailProvider = productDetailProvider\n         )\n         private val context: Context = mockk()\n         private val listOfProductModel = listOf(ProductModel(id = 1))\n@@ -34,7 +30,6 @@ class ProductDetailDispatcherTest {\n         @BeforeClass\n         fun setUp() {\n             justRun { context.startActivity(any()) }\n-            every { isProductDetailRecomEnabledUseCase() } returns false\n         }\n     }\n "},{"filename":"code/ecom-features/pdp/src/test/kotlin/com/inditex/ecom/features/pdp/ui/productpage/detail/ProductDetailPresenterTest.kt","status":"modified","deletions":1,"changes":1,"patch":"@@ -38,7 +38,6 @@ import com.inditex.zara.core.model.response.RecommendProvider\n import com.inditex.zara.core.model.response.RecommendProviders\n import com.inditex.zara.core.model.response.physicalstores.PhysicalStoreModel\n import com.inditex.zara.core.shared.CurrentShoppingCart\n-import com.inditex.zara.core.utils.getSelectedColor\n import com.inditex.zara.domain.actions.tracking.CatalogCrossCustomToastTrackingActions\n import com.inditex.zara.domain.actions.tracking.CatalogPdpTrackingActions\n import com.inditex.zara.domain.base.DefaultErrors"},{"filename":"code/ui/app/src/main/java/com/inditex/zara/catalog/pdp/PDPCoordinator.kt","status":"modified","additions":31,"deletions":6,"changes":37,"patch":"@@ -5,13 +5,16 @@ import com.inditex.ecom.features.ecompdp.api.PDPDispatcher\n import com.inditex.ecom.features.ecompdp.api.models.PDPAnalyticsContext\n import com.inditex.ecom.features.ecompdp.core.api.models.Currency\n import com.inditex.ecom.features.pdp.api.ProductDetailDispatcher\n+import com.inditex.ecom.features.pdp.api.ProductDetailRecomDispatcher\n+import com.inditex.ecom.features.pdp.domain.usecases.IsProductDetailRecomEnabledUseCase\n import com.inditex.ecom.features.pdp.ui.productpage.model.SimpleProductPDPUIModel\n import com.inditex.zara.catalog.pdp.mappers.toPDPSimpleProductModel\n import com.inditex.zara.components.providers.CatalogProvider\n import com.inditex.zara.core.analytics.AnalyticsOriginContainer\n import com.inditex.zara.core.analytics.AnalyticsProductOrigin\n import com.inditex.zara.domain.models.UserOrderItemContextModel\n import com.inditex.zara.domain.models.catalog.product.ProductModel\n+import com.inditex.zara.domain.models.catalog.product.ProductType\n import com.inditex.zara.domain.models.physicalstores.details.PhysicalStoreDetailsModel\n import com.inditex.zara.domain.providers.RemoteConfigProvider\n import com.inditex.zara.domain.repositories.providers.StoreProvider\n@@ -20,13 +23,18 @@ class PDPCoordinator(\n     private val remoteConfigProvider: RemoteConfigProvider,\n     private val oldDispatcher: ProductDetailDispatcher,\n     private val newDispatcher: PDPDispatcher,\n+    private val recomDispatcher: ProductDetailRecomDispatcher,\n+    private val isProductDetailRecomEnabledUseCase: IsProductDetailRecomEnabledUseCase,\n     private val storeProvider: StoreProvider,\n     private val catalogProvider: CatalogProvider\n ) {\n     private val isNewPDPEnabled: Boolean\n         get() =\n             remoteConfigProvider.isNewPdpEnabled\n \n+    private val isPdpRecomEnabled: Boolean\n+        get() = isProductDetailRecomEnabledUseCase()\n+\n     private val currency: Currency?\n         get() {\n             val locale = storeProvider.store?.locale ?: return null\n@@ -58,6 +66,12 @@ class PDPCoordinator(\n         )\n     }\n \n+    private fun SimpleProductPDPUIModel.isRecomEligible(): Boolean =\n+        (kind == ProductModel.Kind.GIFTCARD || kind == ProductModel.Kind.VGIFTCARD) \u0026\u0026 type == ProductType.BUNDLE\n+\n+    private fun List\u003cSimpleProductPDPUIModel\u003e.filterRecomProducts(): List\u003cSimpleProductPDPUIModel\u003e =\n+        filterNot { it.isRecomEligible() }\n+\n     fun open(\n         context: Context?,\n         simpleProducts: List\u003cSimpleProductPDPUIModel\u003e,\n@@ -74,20 +88,29 @@ class PDPCoordinator(\n         physicalStoreId: Long? = null,\n         extendedStore: PhysicalStoreDetailsModel? = null\n     ) {\n+        val currentProduct = simpleProducts[(position?.minus(1)?.takeUnless { it \u003c 0 }) ?: 0]\n+        val isRecomEnabled = isPdpRecomEnabled\n+        val shouldOpenRecom = isRecomEnabled \u0026\u0026 currentProduct.isRecomEligible()\n+        val filteredProducts = if (isRecomEnabled) simpleProducts.filterRecomProducts() else simpleProducts\n+\n         coordinate(\n             context = context,\n+            shouldOpenRecom = shouldOpenRecom,\n+            recomPdp = { ctx -\u003e\n+                recomDispatcher.open(context = ctx, product = currentProduct)\n+            },\n             newPdp = { ctx -\u003e\n                 newDispatcher.open(\n                     context = ctx,\n-                    simpleProducts = simpleProducts.map { it.toPDPSimpleProductModel(currency) },\n+                    simpleProducts = filteredProducts.map { it.toPDPSimpleProductModel(currency) },\n                     position = position ?: 0,\n                     analyticsContext = buildAnalyticsContext(origin, gridParentId)\n                 )\n             },\n             legacyPdp = {\n                 oldDispatcher.open(\n                     context = context,\n-                    simpleProducts = simpleProducts,\n+                    simpleProducts = filteredProducts,\n                     position = position,\n                     origin = origin,\n                     colorsMap = colorsMap,\n@@ -148,13 +171,15 @@ class PDPCoordinator(\n \n     private inline fun coordinate(\n         context: Context?,\n+        shouldOpenRecom: Boolean = false,\n+        recomPdp: (Context) -\u003e Unit = {},\n         newPdp: (Context) -\u003e Unit,\n         legacyPdp: () -\u003e Unit\n     ) {\n-        if (isNewPDPEnabled) {\n-            context?.let(newPdp)\n-        } else {\n-            legacyPdp()\n+        when {\n+            shouldOpenRecom -\u003e context?.let(recomPdp)\n+            isNewPDPEnabled -\u003e context?.let(newPdp)\n+            else -\u003e legacyPdp()\n         }\n     }\n }"},{"filename":"code/ui/app/src/main/java/com/inditex/zara/di/modules/RouterModule.kt","status":"modified","additions":5,"deletions":2,"changes":7,"patch":"@@ -3,6 +3,7 @@\n package com.inditex.zara.di.modules\n \n import com.inditex.ecom.features.pdp.api.ProductDetailDispatcher\n+import com.inditex.ecom.features.pdp.api.ProductDetailRecomDispatcher\n import com.inditex.ecom.features.pdp.ui.fiftycollection.bundleproductpage.router.FiftyCollectionBundleProductsRouter\n import com.inditex.ecom.features.pdp.ui.sizeguide.SizeGuideReComRouterImpl\n import com.inditex.zara.ExternalMapRouterImpl\n@@ -87,18 +88,20 @@ val routerModule = module {\n     factoryOf(::SocialShoppingRouter)\n \n     // region PDP\n+    factory { ProductDetailRecomDispatcher() }\n     factory\u003cProductDetailDispatcher\u003e {\n         ProductDetailDispatcher(\n             trackingProvider = get(),\n-            productDetailProvider = get(),\n-            isProductDetailRecomEnabledUseCase = get()\n+            productDetailProvider = get()\n         )\n     }\n     factory {\n         PDPCoordinator(\n             remoteConfigProvider = get(),\n             oldDispatcher = get(),\n             newDispatcher = get(),\n+            recomDispatcher = get(),\n+            isProductDetailRecomEnabledUseCase = get(),\n             storeProvider = get(),\n             catalogProvider = DiHelper.getOrCreateScope(ScopeType.CATALOG_PROVIDER).get()\n         )"},{"filename":"code/ui/app/src/test/java/com/inditex/zara/catalog/pdp/PDPCoordinatorTest.kt","status":"modified","additions":160,"deletions":4,"changes":164,"patch":"@@ -6,15 +6,18 @@ import com.inditex.ecom.features.ecompdp.api.models.PDPAnalyticsContext\n import com.inditex.ecom.features.ecompdp.api.models.PDPSimpleProductModel\n import com.inditex.ecom.features.ecompdp.core.api.models.Currency\n import com.inditex.ecom.features.pdp.api.ProductDetailDispatcher\n+import com.inditex.ecom.features.pdp.api.ProductDetailRecomDispatcher\n+import com.inditex.ecom.features.pdp.domain.usecases.IsProductDetailRecomEnabledUseCase\n import com.inditex.ecom.features.pdp.ui.productpage.model.SimpleProductPDPUIModel\n import com.inditex.zara.catalog.pdp.mappers.toPDPSimpleProductModel\n+import com.inditex.zara.components.providers.CatalogProvider\n import com.inditex.zara.core.analytics.AnalyticsOriginContainer\n import com.inditex.zara.core.analytics.AnalyticsProductOrigin\n import com.inditex.zara.core.model.response.RLocale\n import com.inditex.zara.core.model.response.RStore\n import com.inditex.zara.domain.models.catalog.product.ProductModel\n+import com.inditex.zara.domain.models.catalog.product.ProductType\n import com.inditex.zara.domain.models.physicalstores.details.PhysicalStoreDetailsModel\n-import com.inditex.zara.components.providers.CatalogProvider\n import com.inditex.zara.domain.models.catalog.category.CategoryModel\n import com.inditex.zara.domain.providers.RemoteConfigProvider\n import com.inditex.zara.domain.repositories.providers.StoreProvider\n@@ -32,6 +35,8 @@ class PDPCoordinatorTest {\n     private val remoteConfigProvider: RemoteConfigProvider = mockk()\n     private val oldDispatcher: ProductDetailDispatcher = mockk(relaxUnitFun = true)\n     private val newDispatcher: PDPDispatcher = mockk(relaxUnitFun = true)\n+    private val recomDispatcher: ProductDetailRecomDispatcher = mockk(relaxUnitFun = true)\n+    private val isProductDetailRecomEnabledUseCase: IsProductDetailRecomEnabledUseCase = mockk()\n     private val storeProvider: StoreProvider = mockk()\n     private val catalogProvider: CatalogProvider = mockk()\n     private val context: Context = mockk()\n@@ -40,13 +45,15 @@ class PDPCoordinatorTest {\n         remoteConfigProvider = remoteConfigProvider,\n         oldDispatcher = oldDispatcher,\n         newDispatcher = newDispatcher,\n+        recomDispatcher = recomDispatcher,\n+        isProductDetailRecomEnabledUseCase = isProductDetailRecomEnabledUseCase,\n         storeProvider = storeProvider,\n         catalogProvider = catalogProvider\n     )\n \n     @After\n     fun tearDown() {\n-        clearMocks(remoteConfigProvider, oldDispatcher, newDispatcher, storeProvider, catalogProvider)\n+        clearMocks(remoteConfigProvider, oldDispatcher, newDispatcher, recomDispatcher, isProductDetailRecomEnabledUseCase, storeProvider, catalogProvider)\n     }\n \n     // region open\n@@ -55,6 +62,7 @@ class PDPCoordinatorTest {\n     fun `GIVEN isNewPdpEnabled true WHEN open is called THEN newDispatcher open is called`() {\n         // Given\n         every { remoteConfigProvider.isNewPdpEnabled } returns true\n+        every { isProductDetailRecomEnabledUseCase() } returns false\n         val store: RStore = mockk()\n         val locale: RLocale = mockk()\n         every { storeProvider.store } returns store\n@@ -100,6 +108,7 @@ class PDPCoordinatorTest {\n     fun `GIVEN isNewPdpEnabled false WHEN open is called THEN oldDispatcher open is called`() {\n         // Given\n         every { remoteConfigProvider.isNewPdpEnabled } returns false\n+        every { isProductDetailRecomEnabledUseCase() } returns false\n         val simpleProduct: SimpleProductPDPUIModel = mockk()\n         val origin = AnalyticsOriginContainer(AnalyticsProductOrigin.EXTERNO)\n \n@@ -138,15 +147,18 @@ class PDPCoordinatorTest {\n     fun `GIVEN isNewPdpEnabled false WHEN open is called with all params THEN oldDispatcher receives all params`() {\n         // Given\n         every { remoteConfigProvider.isNewPdpEnabled } returns false\n+        every { isProductDetailRecomEnabledUseCase() } returns false\n         val simpleProduct: SimpleProductPDPUIModel = mockk()\n+        val simpleProduct2: SimpleProductPDPUIModel = mockk()\n+        val simpleProduct3: SimpleProductPDPUIModel = mockk()\n         val origin = AnalyticsOriginContainer(AnalyticsProductOrigin.EXTERNO)\n         val relatedProduct: ProductModel = mockk()\n         val extendedStore: PhysicalStoreDetailsModel = mockk()\n \n         // When\n         sut.open(\n             context = context,\n-            simpleProducts = listOf(simpleProduct),\n+            simpleProducts = listOf(simpleProduct, simpleProduct2, simpleProduct3),\n             position = 3,\n             origin = origin,\n             colorsMap = mapOf(1L to \"black\"),\n@@ -165,7 +177,7 @@ class PDPCoordinatorTest {\n         verify(exactly = 1) {\n             oldDispatcher.open(\n                 context = context,\n-                simpleProducts = listOf(simpleProduct),\n+                simpleProducts = listOf(simpleProduct, simpleProduct2, simpleProduct3),\n                 position = 3,\n                 origin = origin,\n                 colorsMap = mapOf(1L to \"black\"),\n@@ -191,6 +203,7 @@ class PDPCoordinatorTest {\n     fun `GIVEN currentCategory is not null WHEN open is called THEN analyticsContext has its categoryId and categoryKey`() {\n         // Given\n         every { remoteConfigProvider.isNewPdpEnabled } returns true\n+        every { isProductDetailRecomEnabledUseCase() } returns false\n         every { storeProvider.store } returns null\n         val category: CategoryModel = mockk()\n         every { category.id } returns 42L\n@@ -227,6 +240,7 @@ class PDPCoordinatorTest {\n     fun `GIVEN currentCategory is null WHEN open is called THEN analyticsContext has default values`() {\n         // Given\n         every { remoteConfigProvider.isNewPdpEnabled } returns true\n+        every { isProductDetailRecomEnabledUseCase() } returns false\n         every { storeProvider.store } returns null\n         every { catalogProvider.currentCategory } returns null\n \n@@ -260,6 +274,7 @@ class PDPCoordinatorTest {\n     fun `GIVEN currentCategory has empty key WHEN open is called THEN categoryKey is null`() {\n         // Given\n         every { remoteConfigProvider.isNewPdpEnabled } returns true\n+        every { isProductDetailRecomEnabledUseCase() } returns false\n         every { storeProvider.store } returns null\n         val category: CategoryModel = mockk()\n         every { category.id } returns 10L\n@@ -300,6 +315,7 @@ class PDPCoordinatorTest {\n     fun `GIVEN origin with layoutName, zoomLevel and productOrigin WHEN open is called THEN analyticsContext includes those fields`() {\n         // Given\n         every { remoteConfigProvider.isNewPdpEnabled } returns true\n+        every { isProductDetailRecomEnabledUseCase() } returns false\n         every { storeProvider.store } returns null\n         every { catalogProvider.currentCategory } returns null\n \n@@ -342,6 +358,7 @@ class PDPCoordinatorTest {\n     fun `GIVEN non-default gridParentId WHEN open is called THEN analyticsContext has that gridParentId`() {\n         // Given\n         every { remoteConfigProvider.isNewPdpEnabled } returns true\n+        every { isProductDetailRecomEnabledUseCase() } returns false\n         every { storeProvider.store } returns null\n         every { catalogProvider.currentCategory } returns null\n \n@@ -376,6 +393,7 @@ class PDPCoordinatorTest {\n     fun `GIVEN null origin WHEN open is called THEN analyticsContext has null layoutName, zoomLevel and productOrigin`() {\n         // Given\n         every { remoteConfigProvider.isNewPdpEnabled } returns true\n+        every { isProductDetailRecomEnabledUseCase() } returns false\n         every { storeProvider.store } returns null\n         every { catalogProvider.currentCategory } returns null\n \n@@ -494,4 +512,142 @@ class PDPCoordinatorTest {\n     }\n \n     // endregion\n+\n+    // region recom\n+\n+    @Test\n+    fun `GIVEN recom enabled and giftcard bundle WHEN open is called THEN recomDispatcher open is called`() {\n+        // Given\n+        every { isProductDetailRecomEnabledUseCase() } returns true\n+        val simpleProduct = SimpleProductPDPUIModel(\n+            productId = 100L,\n+            kind = ProductModel.Kind.GIFTCARD,\n+            type = ProductType.BUNDLE\n+        )\n+\n+        // When\n+        sut.open(\n+            context = context,\n+            simpleProducts = listOf(simpleProduct),\n+            position = 0\n+        )\n+\n+        // Then\n+        verify(exactly = 1) { recomDispatcher.open(context = context, product = simpleProduct) }\n+        verify(exactly = 0) { newDispatcher.open(any(), any(), any(), any()) }\n+        verify(exactly = 0) { oldDispatcher.open(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) }\n+    }\n+\n+    @Test\n+    fun `GIVEN recom enabled and vgiftcard bundle WHEN open is called THEN recomDispatcher open is called`() {\n+        // Given\n+        every { isProductDetailRecomEnabledUseCase() } returns true\n+        val simpleProduct = SimpleProductPDPUIModel(\n+            productId = 200L,\n+            kind = ProductModel.Kind.VGIFTCARD,\n+            type = ProductType.BUNDLE\n+        )\n+\n+        // When\n+        sut.open(\n+            context = context,\n+            simpleProducts = listOf(simpleProduct),\n+            position = 0\n+        )\n+\n+        // Then\n+        verify(exactly = 1) { recomDispatcher.open(context = context, product = simpleProduct) }\n+        verify(exactly = 0) { newDispatcher.open(any(), any(), any(), any()) }\n+        verify(exactly = 0) { oldDispatcher.open(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) }\n+    }\n+\n+    @Test\n+    fun `GIVEN recom enabled but product is not bundle WHEN open is called THEN oldDispatcher is called`() {\n+        // Given\n+        every { remoteConfigProvider.isNewPdpEnabled } returns false\n+        every { isProductDetailRecomEnabledUseCase() } returns true\n+        val simpleProduct = SimpleProductPDPUIModel(\n+            productId = 300L,\n+            kind = ProductModel.Kind.GIFTCARD,\n+            type = null\n+        )\n+\n+        // When\n+        sut.open(\n+            context = context,\n+            simpleProducts = listOf(simpleProduct),\n+            position = 0\n+        )\n+\n+        // Then\n+        verify(exactly = 0) { recomDispatcher.open(any(), any()) }\n+        verify(exactly = 1) { oldDispatcher.open(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) }\n+    }\n+\n+    @Test\n+    fun `GIVEN recom enabled and new PDP enabled WHEN open with giftcard bundle THEN recom takes priority`() {\n+        // Given\n+        every { remoteConfigProvider.isNewPdpEnabled } returns true\n+        every { isProductDetailRecomEnabledUseCase() } returns true\n+        val simpleProduct = SimpleProductPDPUIModel(\n+            productId = 400L,\n+            kind = ProductModel.Kind.GIFTCARD,\n+            type = ProductType.BUNDLE\n+        )\n+\n+        // When\n+        sut.open(\n+            context = context,\n+            simpleProducts = listOf(simpleProduct),\n+            position = 0\n+        )\n+\n+        // Then\n+        verify(exactly = 1) { recomDispatcher.open(context = context, product = simpleProduct) }\n+        verify(exactly = 0) { newDispatcher.open(any(), any(), any(), any()) }\n+        verify(exactly = 0) { oldDispatcher.open(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) }\n+    }\n+\n+    @Test\n+    fun `GIVEN recom enabled WHEN open with mixed products and regular product selected THEN recom products filtered from list`() {\n+        // Given\n+        every { remoteConfigProvider.isNewPdpEnabled } returns false\n+        every { isProductDetailRecomEnabledUseCase() } returns true\n+        val regularProduct = SimpleProductPDPUIModel(productId = 1L, kind = null, type = null)\n+        val giftCardBundle = SimpleProductPDPUIModel(\n+            productId = 2L,\n+            kind = ProductModel.Kind.GIFTCARD,\n+            type = ProductType.BUNDLE\n+        )\n+\n+        // When\n+        sut.open(\n+            context = context,\n+            simpleProducts = listOf(regularProduct, giftCardBundle),\n+            position = 0\n+        )\n+\n+        // Then\n+        verify(exactly = 0) { recomDispatcher.open(any(), any()) }\n+        verify(exactly = 1) {\n+            oldDispatcher.open(\n+                context = context,\n+                simpleProducts = listOf(regularProduct),\n+                position = any(),\n+                origin = any(),\n+                colorsMap = any(),\n+                scannedProductId = any(),\n+                orderItemContexts = any(),\n+                gridParentId = any(),\n+                relatedProductOrigin = any(),\n+                searchComponent = any(),\n+                isCarouselEnabled = any(),\n+                isFromRelatedNavigation = any(),\n+                physicalStoreId = any(),\n+                extendedStore = any()\n+            )\n+        }\n+    }\n+\n+    // endregion recom\n }"}]
+```
+
+**Tool: github_pull_request_read**
+
+**Input:**
+```json
+{
+  "method": "get_diff",
+  "owner": "inditex",
+  "repo": "mob-zaraappandroid",
+  "pullNumber": 21869
+}
+```
+
+**Output:**
+```
+diff --git a/code/ecom-features/pdp/src/main/kotlin/com/inditex/ecom/features/pdp/api/ProductDetailDispatcher.kt b/code/ecom-features/pdp/src/main/kotlin/com/inditex/ecom/features/pdp/api/ProductDetailDispatcher.kt
+index 87610e84c023..3c25d8d9e254 100644
+--- a/code/ecom-features/pdp/src/main/kotlin/com/inditex/ecom/features/pdp/api/ProductDetailDispatcher.kt
++++ b/code/ecom-features/pdp/src/main/kotlin/com/inditex/ecom/features/pdp/api/ProductDetailDispatcher.kt
+@@ -2,10 +2,7 @@ package com.inditex.ecom.features.pdp.api
+ 
+ import android.content.Context
+ import android.content.Intent
+-import com.inditex.ecom.features.pdp.domain.usecases.IsProductDetailRecomEnabledUseCase
+-import com.inditex.ecom.features.pdp.ui.activity.GIFT_CARD_PRODUCT_BUNDLE_KEY
+ import com.inditex.ecom.features.pdp.ui.activity.ProductDetailFlowActivity
+-import com.inditex.ecom.features.pdp.ui.activity.ProductDetailRecomActivity
+ import com.inditex.ecom.features.pdp.ui.helper.ProductDetailProvider
+ import com.inditex.ecom.features.pdp.ui.productpage.model.SimpleProductPDPUIModel
+ import com.inditex.trackingdataservice.model.TrackingProductOrigin
+@@ -17,14 +14,12 @@ import com.inditex.zara.domain.models.UserOrderItemContextModel
+ import com.inditex.zara.domain.models.catalog.CategoryType
+ import com.inditex.zara.domain.models.catalog.product.ProductModel
+ import com.inditex.zara.domain.models.physicalstores.details.PhysicalStoreDetailsModel
+-import com.inditex.zara.domain.models.catalog.product.ProductType
+ import com.inditex.zara.domain.providers.TrackingProvider
+ import java.io.Serializable
+ 
+ class ProductDetailDispatcher(
+     private val trackingProvider: TrackingProvider,
+-    private val productDetailProvider: ProductDetailProvider,
+-    private val isProductDetailRecomEnabledUseCase: IsProductDetailRecomEnabledUseCase
++    private val productDetailProvider: ProductDetailProvider
+ ) {
+ 
+     fun open(
+@@ -45,33 +40,22 @@ class ProductDetailDispatcher(
+     ) {
+         trackingProvider.currentProductViewPagerAnalyticsContexts =
+             orderItemContexts.map { it.analyticsContext }
+-        val currentProduct = simpleProducts[(position?.minus(1)?.takeUnless { it < 0 }) ?: 0]
+-        val isPdpRecomEnabled = isProductDetailRecomEnabledUseCase()
+-        val shouldOpenPdpRecom = isPdpRecomEnabled && currentProduct.kind in listOf(
+-            ProductModel.Kind.GIFTCARD,
+-            ProductModel.Kind.VGIFTCARD
+-        ) && currentProduct.type == ProductType.BUNDLE
+-        if (shouldOpenPdpRecom) {
+-            openRecomProductDetail(context = context, currentProduct = currentProduct)
+-        } else {
+-            openNativeProductDetail(
+-                simpleProducts = simpleProducts,
+-                context = context,
+-                position = position,
+-                origin = origin,
+-                colorsMap = colorsMap,
+-                scannedProductId = scannedProductId,
+-                orderItemContexts = orderItemContexts,
+-                gridParentId = gridParentId,
+-                relatedProductOrigin = relatedProductOrigin,
+-                searchComponent = searchComponent,
+-                isCarouselEnabled = isCarouselEnabled,
+-                isFromRelatedNavigation = isFromRelatedNavigation,
+-                isPdpRecomEnabled = isPdpRecomEnabled,
+-                physicalStoreId = physicalStoreId,
+-                extendedStore = extendedStore
+-            )
+-        }
++        openNativeProductDetail(
++            simpleProducts = simpleProducts,
++            context = context,
++            position = position,
++            origin = origin,
++            colorsMap = colorsMap,
++            scannedProductId = scannedProductId,
++            orderItemContexts = orderItemContexts,
++            gridParentId = gridParentId,
++            relatedProductOrigin = relatedProductOrigin,
++            searchComponent = searchComponent,
++            isCarouselEnabled = isCarouselEnabled,
++            isFromRelatedNavigation = isFromRelatedNavigation,
++            physicalStoreId = physicalStoreId,
++            extendedStore = extendedStore
++        )
+     }
+ 
+     private fun openNativeProductDetail(
+@@ -87,18 +71,10 @@ class ProductDetailDispatcher(
+         searchComponent: String?,
+         isCarouselEnabled: Boolean,
+         isFromRelatedNavigation: Boolean,
+-        isPdpRecomEnabled: Boolean,
+         physicalStoreId: Long?,
+         extendedStore: PhysicalStoreDetailsModel?
+     ) {
+-        val filteredSimpleProducts = if (isPdpRecomEnabled) {
+-            simpleProducts.filterNot {
+-                it.kind in listOf(ProductModel.Kind.GIFTCARD, ProductModel.Kind.VGIFTCARD) && it.type == ProductType.BUNDLE
+-            }
+-        } else {
+-            simpleProducts
+-        }
+-        productDetailProvider.addSimpleProducts(filteredSimpleProducts)
++        productDetailProvider.addSimpleProducts(simpleProducts)
+         context?.createIntent(
+             position = position,
+             origin = origin,
+@@ -115,17 +91,6 @@ class ProductDetailDispatcher(
+         )?.let(context::startActivity)
+     }
+ 
+-    private fun openRecomProductDetail(
+-        context: Context?,
+-        currentProduct: SimpleProductPDPUIModel
+-    ) {
+-        context?.let {
+-            Intent(it, ProductDetailRecomActivity::class.java).apply {
+-                putExtra(GIFT_CARD_PRODUCT_BUNDLE_KEY, currentProduct)
+-            }.let(context::startActivity)
+-        }
+-    }
+-
+     private fun Context.createIntent(
+         position: Int? = null,
+         origin: AnalyticsOriginContainer? = null,
+diff --git a/code/ecom-features/pdp/src/main/kotlin/com/inditex/ecom/features/pdp/api/ProductDetailRecomDispatcher.kt b/code/ecom-features/pdp/src/main/kotlin/com/inditex/ecom/features/pdp/api/ProductDetailRecomDispatcher.kt
+new file mode 100644
+index 000000000000..d599ad5b387a
+--- /dev/null
++++ b/code/ecom-features/pdp/src/main/kotlin/com/inditex/ecom/features/pdp/api/ProductDetailRecomDispatcher.kt
+@@ -0,0 +1,16 @@
++package com.inditex.ecom.features.pdp.api
++
++import android.content.Context
++import android.content.Intent
++import com.inditex.ecom.features.pdp.ui.activity.GIFT_CARD_PRODUCT_BUNDLE_KEY
++import com.inditex.ecom.features.pdp.ui.activity.ProductDetailRecomActivity
++import com.inditex.ecom.features.pdp.ui.productpage.model.SimpleProductPDPUIModel
++
++class ProductDetailRecomDispatcher {
++
++    fun open(context: Context, product: SimpleProductPDPUIModel) {
++        Intent(context, ProductDetailRecomActivity::class.java).apply {
++            putExtra(GIFT_CARD_PRODUCT_BUNDLE_KEY, product)
++        }.let(context::startActivity)
++    }
++}
+diff --git a/code/ecom-features/pdp/src/test/kotlin/com/inditex/ecom/features/pdp/api/ProductDetailRecomDispatcherTest.kt b/code/ecom-features/pdp/src/test/kotlin/com/inditex/ecom/features/pdp/api/ProductDetailRecomDispatcherTest.kt
+new file mode 100644
+index 000000000000..16a674fd60db
+--- /dev/null
++++ b/code/ecom-features/pdp/src/test/kotlin/com/inditex/ecom/features/pdp/api/ProductDetailRecomDispatcherTest.kt
+@@ -0,0 +1,27 @@
++package com.inditex.ecom.features.pdp.api
++
++import android.content.Context
++import com.inditex.ecom.features.pdp.ui.productpage.model.SimpleProductPDPUIModel
++import io.mockk.justRun
++import io.mockk.mockk
++import io.mockk.verify
++import org.junit.Test
++
++class ProductDetailRecomDispatcherTest {
++
++    private val context: Context = mockk()
++    private val dispatcher = ProductDetailRecomDispatcher()
++
++    @Test
++    fun `GIVEN a product WHEN open is called THEN startActivity is called`() {
++        // Given
++        justRun { context.startActivity(any()) }
++        val product = SimpleProductPDPUIModel(productId = 1L)
++
++        // When
++        dispatcher.open(context = context, product = product)
++
++        // Then
++        verify(exactly = 1) { context.startActivity(any()) }
++    }
++}
+diff --git a/code/ecom-features/pdp/src/test/kotlin/com/inditex/ecom/features/pdp/ui/ProductDetailDispatcherTest.kt b/code/ecom-features/pdp/src/test/kotlin/com/inditex/ecom/features/pdp/ui/ProductDetailDispatcherTest.kt
+index b3da06f14577..77d50d957e31 100644
+--- a/code/ecom-features/pdp/src/test/kotlin/com/inditex/ecom/features/pdp/ui/ProductDetailDispatcherTest.kt
++++ b/code/ecom-features/pdp/src/test/kotlin/com/inditex/ecom/features/pdp/ui/ProductDetailDispatcherTest.kt
+@@ -1,14 +1,12 @@
+ package com.inditex.ecom.features.pdp.ui
+ 
+ import android.content.Context
+-import com.inditex.ecom.features.pdp.domain.usecases.IsProductDetailRecomEnabledUseCase
+ import com.inditex.ecom.features.pdp.api.ProductDetailDispatcher
+ import com.inditex.ecom.features.pdp.ui.helper.ProductDetailProvider
+ import com.inditex.ecom.features.pdp.ui.productpage.mapper.toSimpleProductPDP
+ import com.inditex.ecom.features.pdp.ui.productpage.model.SimpleProductPDPUIModel
+ import com.inditex.zara.domain.models.catalog.product.ProductModel
+ import com.inditex.zara.domain.providers.TrackingProvider
+-import io.mockk.every
+ import io.mockk.justRun
+ import io.mockk.mockk
+ import io.mockk.verify
+@@ -21,11 +19,9 @@ class ProductDetailDispatcherTest {
+     companion object {
+         private val trackingProvider = TrackingProvider(mockk())
+         private val productDetailProvider = ProductDetailProvider()
+-        private val isProductDetailRecomEnabledUseCase: IsProductDetailRecomEnabledUseCase = mockk()
+         private val dispatcher = ProductDetailDispatcher(
+             trackingProvider = trackingProvider,
+-            productDetailProvider = productDetailProvider,
+-            isProductDetailRecomEnabledUseCase = isProductDetailRecomEnabledUseCase
++            productDetailProvider = productDetailProvider
+         )
+         private val context: Context = mockk()
+         private val listOfProductModel = listOf(ProductModel(id = 1))
+@@ -34,7 +30,6 @@ class ProductDetailDispatcherTest {
+         @BeforeClass
+         fun setUp() {
+             justRun { context.startActivity(any()) }
+-            every { isProductDetailRecomEnabledUseCase() } returns false
+         }
+     }
+ 
+diff --git a/code/ecom-features/pdp/src/test/kotlin/com/inditex/ecom/features/pdp/ui/productpage/detail/ProductDetailPresenterTest.kt b/code/ecom-features/pdp/src/test/kotlin/com/inditex/ecom/features/pdp/ui/productpage/detail/ProductDetailPresenterTest.kt
+index 07e103a59bcf..69d7e5b8d0d2 100644
+--- a/code/ecom-features/pdp/src/test/kotlin/com/inditex/ecom/features/pdp/ui/productpage/detail/ProductDetailPresenterTest.kt
++++ b/code/ecom-features/pdp/src/test/kotlin/com/inditex/ecom/features/pdp/ui/productpage/detail/ProductDetailPresenterTest.kt
+@@ -38,7 +38,6 @@ import com.inditex.zara.core.model.response.RecommendProvider
+ import com.inditex.zara.core.model.response.RecommendProviders
+ import com.inditex.zara.core.model.response.physicalstores.PhysicalStoreModel
+ import com.inditex.zara.core.shared.CurrentShoppingCart
+-import com.inditex.zara.core.utils.getSelectedColor
+ import com.inditex.zara.domain.actions.tracking.CatalogCrossCustomToastTrackingActions
+ import com.inditex.zara.domain.actions.tracking.CatalogPdpTrackingActions
+ import com.inditex.zara.domain.base.DefaultErrors
+diff --git a/code/ui/app/src/main/java/com/inditex/zara/catalog/pdp/PDPCoordinator.kt b/code/ui/app/src/main/java/com/inditex/zara/catalog/pdp/PDPCoordinator.kt
+index afd2c360f16d..0225bd7c8f2c 100644
+--- a/code/ui/app/src/main/java/com/inditex/zara/catalog/pdp/PDPCoordinator.kt
++++ b/code/ui/app/src/main/java/com/inditex/zara/catalog/pdp/PDPCoordinator.kt
+@@ -5,6 +5,8 @@ import com.inditex.ecom.features.ecompdp.api.PDPDispatcher
+ import com.inditex.ecom.features.ecompdp.api.models.PDPAnalyticsContext
+ import com.inditex.ecom.features.ecompdp.core.api.models.Currency
+ import com.inditex.ecom.features.pdp.api.ProductDetailDispatcher
++import com.inditex.ecom.features.pdp.api.ProductDetailRecomDispatcher
++import com.inditex.ecom.features.pdp.domain.usecases.IsProductDetailRecomEnabledUseCase
+ import com.inditex.ecom.features.pdp.ui.productpage.model.SimpleProductPDPUIModel
+ import com.inditex.zara.catalog.pdp.mappers.toPDPSimpleProductModel
+ import com.inditex.zara.components.providers.CatalogProvider
+@@ -12,6 +14,7 @@ import com.inditex.zara.core.analytics.AnalyticsOriginContainer
+ import com.inditex.zara.core.analytics.AnalyticsProductOrigin
+ import com.inditex.zara.domain.models.UserOrderItemContextModel
+ import com.inditex.zara.domain.models.catalog.product.ProductModel
++import com.inditex.zara.domain.models.catalog.product.ProductType
+ import com.inditex.zara.domain.models.physicalstores.details.PhysicalStoreDetailsModel
+ import com.inditex.zara.domain.providers.RemoteConfigProvider
+ import com.inditex.zara.domain.repositories.providers.StoreProvider
+@@ -20,6 +23,8 @@ class PDPCoordinator(
+     private val remoteConfigProvider: RemoteConfigProvider,
+     private val oldDispatcher: ProductDetailDispatcher,
+     private val newDispatcher: PDPDispatcher,
++    private val recomDispatcher: ProductDetailRecomDispatcher,
++    private val isProductDetailRecomEnabledUseCase: IsProductDetailRecomEnabledUseCase,
+     private val storeProvider: StoreProvider,
+     private val catalogProvider: CatalogProvider
+ ) {
+@@ -27,6 +32,9 @@ class PDPCoordinator(
+         get() =
+             remoteConfigProvider.isNewPdpEnabled
+ 
++    private val isPdpRecomEnabled: Boolean
++        get() = isProductDetailRecomEnabledUseCase()
++
+     private val currency: Currency?
+         get() {
+             val locale = storeProvider.store?.locale ?: return null
+@@ -58,6 +66,12 @@ class PDPCoordinator(
+         )
+     }
+ 
++    private fun SimpleProductPDPUIModel.isRecomEligible(): Boolean =
++        (kind == ProductModel.Kind.GIFTCARD || kind == ProductModel.Kind.VGIFTCARD) && type == ProductType.BUNDLE
++
++    private fun List<SimpleProductPDPUIModel>.filterRecomProducts(): List<SimpleProductPDPUIModel> =
++        filterNot { it.isRecomEligible() }
++
+     fun open(
+         context: Context?,
+         simpleProducts: List<SimpleProductPDPUIModel>,
+@@ -74,12 +88,21 @@ class PDPCoordinator(
+         physicalStoreId: Long? = null,
+         extendedStore: PhysicalStoreDetailsModel? = null
+     ) {
++        val currentProduct = simpleProducts[(position?.minus(1)?.takeUnless { it < 0 }) ?: 0]
++        val isRecomEnabled = isPdpRecomEnabled
++        val shouldOpenRecom = isRecomEnabled && currentProduct.isRecomEligible()
++        val filteredProducts = if (isRecomEnabled) simpleProducts.filterRecomProducts() else simpleProducts
++
+         coordinate(
+             context = context,
++            shouldOpenRecom = shouldOpenRecom,
++            recomPdp = { ctx ->
++                recomDispatcher.open(context = ctx, product = currentProduct)
++            },
+             newPdp = { ctx ->
+                 newDispatcher.open(
+                     context = ctx,
+-                    simpleProducts = simpleProducts.map { it.toPDPSimpleProductModel(currency) },
++                    simpleProducts = filteredProducts.map { it.toPDPSimpleProductModel(currency) },
+                     position = position ?: 0,
+                     analyticsContext = buildAnalyticsContext(origin, gridParentId)
+                 )
+@@ -87,7 +110,7 @@ class PDPCoordinator(
+             legacyPdp = {
+                 oldDispatcher.open(
+                     context = context,
+-                    simpleProducts = simpleProducts,
++                    simpleProducts = filteredProducts,
+                     position = position,
+                     origin = origin,
+                     colorsMap = colorsMap,
+@@ -148,13 +171,15 @@ class PDPCoordinator(
+ 
+     private inline fun coordinate(
+         context: Context?,
++        shouldOpenRecom: Boolean = false,
++        recomPdp: (Context) -> Unit = {},
+         newPdp: (Context) -> Unit,
+         legacyPdp: () -> Unit
+     ) {
+-        if (isNewPDPEnabled) {
+-            context?.let(newPdp)
+-        } else {
+-            legacyPdp()
++        when {
++            shouldOpenRecom -> context?.let(recomPdp)
++            isNewPDPEnabled -> context?.let(newPdp)
++            else -> legacyPdp()
+         }
+     }
+ }
+diff --git a/code/ui/app/src/main/java/com/inditex/zara/di/modules/RouterModule.kt b/code/ui/app/src/main/java/com/inditex/zara/di/modules/RouterModule.kt
+index e41105b87217..c440514a9253 100644
+--- a/code/ui/app/src/main/java/com/inditex/zara/di/modules/RouterModule.kt
++++ b/code/ui/app/src/main/java/com/inditex/zara/di/modules/RouterModule.kt
+@@ -3,6 +3,7 @@
+ package com.inditex.zara.di.modules
+ 
+ import com.inditex.ecom.features.pdp.api.ProductDetailDispatcher
++import com.inditex.ecom.features.pdp.api.ProductDetailRecomDispatcher
+ import com.inditex.ecom.features.pdp.ui.fiftycollection.bundleproductpage.router.FiftyCollectionBundleProductsRouter
+ import com.inditex.ecom.features.pdp.ui.sizeguide.SizeGuideReComRouterImpl
+ import com.inditex.zara.ExternalMapRouterImpl
+@@ -87,11 +88,11 @@ val routerModule = module {
+     factoryOf(::SocialShoppingRouter)
+ 
+     // region PDP
++    factory { ProductDetailRecomDispatcher() }
+     factory<ProductDetailDispatcher> {
+         ProductDetailDispatcher(
+             trackingProvider = get(),
+-            productDetailProvider = get(),
+-            isProductDetailRecomEnabledUseCase = get()
++            productDetailProvider = get()
+         )
+     }
+     factory {
+@@ -99,6 +100,8 @@ val routerModule = module {
+             remoteConfigProvider = get(),
+             oldDispatcher = get(),
+             newDispatcher = get(),
++            recomDispatcher = get(),
++            isProductDetailRecomEnabledUseCase = get(),
+             storeProvider = get(),
+             catalogProvider = DiHelper.getOrCreateScope(ScopeType.CATALOG_PROVIDER).get()
+         )
+diff --git a/code/ui/app/src/test/java/com/inditex/zara/catalog/pdp/PDPCoordinatorTest.kt b/code/ui/app/src/test/java/com/inditex/zara/catalog/pdp/PDPCoordinatorTest.kt
+index 2f38d67e6e14..5b309b47ed67 100644
+--- a/code/ui/app/src/test/java/com/inditex/zara/catalog/pdp/PDPCoordinatorTest.kt
++++ b/code/ui/app/src/test/java/com/inditex/zara/catalog/pdp/PDPCoordinatorTest.kt
+@@ -6,15 +6,18 @@ import com.inditex.ecom.features.ecompdp.api.models.PDPAnalyticsContext
+ import com.inditex.ecom.features.ecompdp.api.models.PDPSimpleProductModel
+ import com.inditex.ecom.features.ecompdp.core.api.models.Currency
+ import com.inditex.ecom.features.pdp.api.ProductDetailDispatcher
++import com.inditex.ecom.features.pdp.api.ProductDetailRecomDispatcher
++import com.inditex.ecom.features.pdp.domain.usecases.IsProductDetailRecomEnabledUseCase
+ import com.inditex.ecom.features.pdp.ui.productpage.model.SimpleProductPDPUIModel
+ import com.inditex.zara.catalog.pdp.mappers.toPDPSimpleProductModel
++import com.inditex.zara.components.providers.CatalogProvider
+ import com.inditex.zara.core.analytics.AnalyticsOriginContainer
+ import com.inditex.zara.core.analytics.AnalyticsProductOrigin
+ import com.inditex.zara.core.model.response.RLocale
+ import com.inditex.zara.core.model.response.RStore
+ import com.inditex.zara.domain.models.catalog.product.ProductModel
++import com.inditex.zara.domain.models.catalog.product.ProductType
+ import com.inditex.zara.domain.models.physicalstores.details.PhysicalStoreDetailsModel
+-import com.inditex.zara.components.providers.CatalogProvider
+ import com.inditex.zara.domain.models.catalog.category.CategoryModel
+ import com.inditex.zara.domain.providers.RemoteConfigProvider
+ import com.inditex.zara.domain.repositories.providers.StoreProvider
+@@ -32,6 +35,8 @@ class PDPCoordinatorTest {
+     private val remoteConfigProvider: RemoteConfigProvider = mockk()
+     private val oldDispatcher: ProductDetailDispatcher = mockk(relaxUnitFun = true)
+     private val newDispatcher: PDPDispatcher = mockk(relaxUnitFun = true)
++    private val recomDispatcher: ProductDetailRecomDispatcher = mockk(relaxUnitFun = true)
++    private val isProductDetailRecomEnabledUseCase: IsProductDetailRecomEnabledUseCase = mockk()
+     private val storeProvider: StoreProvider = mockk()
+     private val catalogProvider: CatalogProvider = mockk()
+     private val context: Context = mockk()
+@@ -40,13 +45,15 @@ class PDPCoordinatorTest {
+         remoteConfigProvider = remoteConfigProvider,
+         oldDispatcher = oldDispatcher,
+         newDispatcher = newDispatcher,
++        recomDispatcher = recomDispatcher,
++        isProductDetailRecomEnabledUseCase = isProductDetailRecomEnabledUseCase,
+         storeProvider = storeProvider,
+         catalogProvider = catalogProvider
+     )
+ 
+     @After
+     fun tearDown() {
+-        clearMocks(remoteConfigProvider, oldDispatcher, newDispatcher, storeProvider, catalogProvider)
++        clearMocks(remoteConfigProvider, oldDispatcher, newDispatcher, recomDispatcher, isProductDetailRecomEnabledUseCase, storeProvider, catalogProvider)
+     }
+ 
+     // region open
+@@ -55,6 +62,7 @@ class PDPCoordinatorTest {
+     fun `GIVEN isNewPdpEnabled true WHEN open is called THEN newDispatcher open is called`() {
+         // Given
+         every { remoteConfigProvider.isNewPdpEnabled } returns true
++        every { isProductDetailRecomEnabledUseCase() } returns false
+         val store: RStore = mockk()
+         val locale: RLocale = mockk()
+         every { storeProvider.store } returns store
+@@ -100,6 +108,7 @@ class PDPCoordinatorTest {
+     fun `GIVEN isNewPdpEnabled false WHEN open is called THEN oldDispatcher open is called`() {
+         // Given
+         every { remoteConfigProvider.isNewPdpEnabled } returns false
++        every { isProductDetailRecomEnabledUseCase() } returns false
+         val simpleProduct: SimpleProductPDPUIModel = mockk()
+         val origin = AnalyticsOriginContainer(AnalyticsProductOrigin.EXTERNO)
+ 
+@@ -138,7 +147,10 @@ class PDPCoordinatorTest {
+     fun `GIVEN isNewPdpEnabled false WHEN open is called with all params THEN oldDispatcher receives all params`() {
+         // Given
+         every { remoteConfigProvider.isNewPdpEnabled } returns false
++        every { isProductDetailRecomEnabledUseCase() } returns false
+         val simpleProduct: SimpleProductPDPUIModel = mockk()
++        val simpleProduct2: SimpleProductPDPUIModel = mockk()
++        val simpleProduct3: SimpleProductPDPUIModel = mockk()
+         val origin = AnalyticsOriginContainer(AnalyticsProductOrigin.EXTERNO)
+         val relatedProduct: ProductModel = mockk()
+         val extendedStore: PhysicalStoreDetailsModel = mockk()
+@@ -146,7 +158,7 @@ class PDPCoordinatorTest {
+         // When
+         sut.open(
+             context = context,
+-            simpleProducts = listOf(simpleProduct),
++            simpleProducts = listOf(simpleProduct, simpleProduct2, simpleProduct3),
+             position = 3,
+             origin = origin,
+             colorsMap = mapOf(1L to "black"),
+@@ -165,7 +177,7 @@ class PDPCoordinatorTest {
+         verify(exactly = 1) {
+             oldDispatcher.open(
+                 context = context,
+-                simpleProducts = listOf(simpleProduct),
++                simpleProducts = listOf(simpleProduct, simpleProduct2, simpleProduct3),
+                 position = 3,
+                 origin = origin,
+                 colorsMap = mapOf(1L to "black"),
+@@ -191,6 +203,7 @@ class PDPCoordinatorTest {
+     fun `GIVEN currentCategory is not null WHEN open is called THEN analyticsContext has its categoryId and categoryKey`() {
+         // Given
+         every { remoteConfigProvider.isNewPdpEnabled } returns true
++        every { isProductDetailRecomEnabledUseCase() } returns false
+         every { storeProvider.store } returns null
+         val category: CategoryModel = mockk()
+         every { category.id } returns 42L
+@@ -227,6 +240,7 @@ class PDPCoordinatorTest {
+     fun `GIVEN currentCategory is null WHEN open is called THEN analyticsContext has default values`() {
+         // Given
+         every { remoteConfigProvider.isNewPdpEnabled } returns true
++        every { isProductDetailRecomEnabledUseCase() } returns false
+         every { storeProvider.store } returns null
+         every { catalogProvider.currentCategory } returns null
+ 
+@@ -260,6 +274,7 @@ class PDPCoordinatorTest {
+     fun `GIVEN currentCategory has empty key WHEN open is called THEN categoryKey is null`() {
+         // Given
+         every { remoteConfigProvider.isNewPdpEnabled } returns true
++        every { isProductDetailRecomEnabledUseCase() } returns false
+         every { storeProvider.store } returns null
+         val category: CategoryModel = mockk()
+         every { category.id } returns 10L
+@@ -300,6 +315,7 @@ class PDPCoordinatorTest {
+     fun `GIVEN origin with layoutName, zoomLevel and productOrigin WHEN open is called THEN analyticsContext includes those fields`() {
+         // Given
+         every { remoteConfigProvider.isNewPdpEnabled } returns true
++        every { isProductDetailRecomEnabledUseCase() } returns false
+         every { storeProvider.store } returns null
+         every { catalogProvider.currentCategory } returns null
+ 
+@@ -342,6 +358,7 @@ class PDPCoordinatorTest {
+     fun `GIVEN non-default gridParentId WHEN open is called THEN analyticsContext has that gridParentId`() {
+         // Given
+         every { remoteConfigProvider.isNewPdpEnabled } returns true
++        every { isProductDetailRecomEnabledUseCase() } returns false
+         every { storeProvider.store } returns null
+         every { catalogProvider.currentCategory } returns null
+ 
+@@ -376,6 +393,7 @@ class PDPCoordinatorTest {
+     fun `GIVEN null origin WHEN open is called THEN analyticsContext has null layoutName, zoomLevel and productOrigin`() {
+         // Given
+         every { remoteConfigProvider.isNewPdpEnabled } returns true
++        every { isProductDetailRecomEnabledUseCase() } returns false
+         every { storeProvider.store } returns null
+         every { catalogProvider.currentCategory } returns null
+ 
+@@ -494,4 +512,142 @@ class PDPCoordinatorTest {
+     }
+ 
+     // endregion
++
++    // region recom
++
++    @Test
++    fun `GIVEN recom enabled and giftcard bundle WHEN open is called THEN recomDispatcher open is called`() {
++        // Given
++        every { isProductDetailRecomEnabledUseCase() } returns true
++        val simpleProduct = SimpleProductPDPUIModel(
++            productId = 100L,
++            kind = ProductModel.Kind.GIFTCARD,
++            type = ProductType.BUNDLE
++        )
++
++        // When
++        sut.open(
++            context = context,
++            simpleProducts = listOf(simpleProduct),
++            position = 0
++        )
++
++        // Then
++        verify(exactly = 1) { recomDispatcher.open(context = context, product = simpleProduct) }
++        verify(exactly = 0) { newDispatcher.open(any(), any(), any(), any()) }
++        verify(exactly = 0) { oldDispatcher.open(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) }
++    }
++
++    @Test
++    fun `GIVEN recom enabled and vgiftcard bundle WHEN open is called THEN recomDispatcher open is called`() {
++        // Given
++        every { isProductDetailRecomEnabledUseCase() } returns true
++        val simpleProduct = SimpleProductPDPUIModel(
++            productId = 200L,
++            kind = ProductModel.Kind.VGIFTCARD,
++            type = ProductType.BUNDLE
++        )
++
++        // When
++        sut.open(
++            context = context,
++            simpleProducts = listOf(simpleProduct),
++            position = 0
++        )
++
++        // Then
++        verify(exactly = 1) { recomDispatcher.open(context = context, product = simpleProduct) }
++        verify(exactly = 0) { newDispatcher.open(any(), any(), any(), any()) }
++        verify(exactly = 0) { oldDispatcher.open(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) }
++    }
++
++    @Test
++    fun `GIVEN recom enabled but product is not bundle WHEN open is called THEN oldDispatcher is called`() {
++        // Given
++        every { remoteConfigProvider.isNewPdpEnabled } returns false
++        every { isProductDetailRecomEnabledUseCase() } returns true
++        val simpleProduct = SimpleProductPDPUIModel(
++            productId = 300L,
++            kind = ProductModel.Kind.GIFTCARD,
++            type = null
++        )
++
++        // When
++        sut.open(
++            context = context,
++            simpleProducts = listOf(simpleProduct),
++            position = 0
++        )
++
++        // Then
++        verify(exactly = 0) { recomDispatcher.open(any(), any()) }
++        verify(exactly = 1) { oldDispatcher.open(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) }
++    }
++
++    @Test
++    fun `GIVEN recom enabled and new PDP enabled WHEN open with giftcard bundle THEN recom takes priority`() {
++        // Given
++        every { remoteConfigProvider.isNewPdpEnabled } returns true
++        every { isProductDetailRecomEnabledUseCase() } returns true
++        val simpleProduct = SimpleProductPDPUIModel(
++            productId = 400L,
++            kind = ProductModel.Kind.GIFTCARD,
++            type = ProductType.BUNDLE
++        )
++
++        // When
++        sut.open(
++            context = context,
++            simpleProducts = listOf(simpleProduct),
++            position = 0
++        )
++
++        // Then
++        verify(exactly = 1) { recomDispatcher.open(context = context, product = simpleProduct) }
++        verify(exactly = 0) { newDispatcher.open(any(), any(), any(), any()) }
++        verify(exactly = 0) { oldDispatcher.open(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) }
++    }
++
++    @Test
++    fun `GIVEN recom enabled WHEN open with mixed products and regular product selected THEN recom products filtered from list`() {
++        // Given
++        every { remoteConfigProvider.isNewPdpEnabled } returns false
++        every { isProductDetailRecomEnabledUseCase() } returns true
++        val regularProduct = SimpleProductPDPUIModel(productId = 1L, kind = null, type = null)
++        val giftCardBundle = SimpleProductPDPUIModel(
++            productId = 2L,
++            kind = ProductModel.Kind.GIFTCARD,
++            type = ProductType.BUNDLE
++        )
++
++        // When
++        sut.open(
++            context = context,
++            simpleProducts = listOf(regularProduct, giftCardBundle),
++            position = 0
++        )
++
++        // Then
++        verify(exactly = 0) { recomDispatcher.open(any(), any()) }
++        verify(exactly = 1) {
++            oldDispatcher.open(
++                context = context,
++                simpleProducts = listOf(regularProduct),
++                position = any(),
++                origin = any(),
++                colorsMap = any(),
++                scannedProductId = any(),
++                orderItemContexts = any(),
++                gridParentId = any(),
++                relatedProductOrigin = any(),
++                searchComponent = any(),
++                isCarouselEnabled = any(),
++                isFromRelatedNavigation = any(),
++                physicalStoreId = any(),
++                extendedStore = any()
++            )
++        }
++    }
++
++    // endregion recom
+ }
+
+```
+
+---
+
+## Assistant (Plan · Claude Opus 4.6 · 11.4s)
+
+_Thinking:_
+
+Now let me also look at the review comments and check runs to understand the CI status.
+
+Good, I've got all the diff data. Let me also check existing review comments and CI status to give you a complete picture.
+
+**Tool: github_pull_request_read**
+
+**Input:**
+```json
+{
+  "method": "get_review_comments",
+  "owner": "inditex",
+  "pullNumber": 21869,
+  "repo": "mob-zaraappandroid"
+}
+```
+
+**Output:**
+```
+{"review_threads":[],"totalCount":0,"pageInfo":{"hasNextPage":false,"hasPreviousPage":false}}
+```
+
+**Tool: github_pull_request_read**
+
+**Input:**
+```json
+{
+  "method": "get_reviews",
+  "owner": "inditex",
+  "pullNumber": 21869,
+  "repo": "mob-zaraappandroid"
+}
+```
+
+**Output:**
+```
+[{"id":4252320507,"state":"APPROVED","html_url":"https://github.com/inditex/mob-zaraappandroid/pull/21869#pullrequestreview-4252320507","user":{"login":"puryfive","id":7845068,"profile_url":"https://github.com/puryfive","avatar_url":"https://avatars.githubusercontent.com/u/7845068?u=9980a2b539a14ab0a42b397772532920b4ab798a\u0026v=4"},"commit_id":"0fb5d564e9a7a196e92ebfa24ace467324d3eb83","submitted_at":"2026-05-08T12:48:26Z","author_association":"MEMBER"},{"id":4252412040,"state":"APPROVED","html_url":"https://github.com/inditex/mob-zaraappandroid/pull/21869#pullrequestreview-4252412040","user":{"login":"Kilarczyk","id":46266592,"profile_url":"https://github.com/Kilarczyk","avatar_url":"https://avatars.githubusercontent.com/u/46266592?u=7338d44011c5daa386feb04fbbb47960a6c0f1c5\u0026v=4"},"commit_id":"0fb5d564e9a7a196e92ebfa24ace467324d3eb83","submitted_at":"2026-05-08T13:04:17Z","author_association":"MEMBER"},{"id":4261108254,"state":"APPROVED","html_url":"https://github.com/inditex/mob-zaraappandroid/pull/21869#pullrequestreview-4261108254","user":{"login":"JavierCNU","id":140718924,"profile_url":"https://github.com/JavierCNU","avatar_url":"https://avatars.githubusercontent.com/u/140718924?u=0735b7aac4b00bc4af629a7220058058c3f45dcf\u0026v=4"},"commit_id":"e66ddc741947efbe348490eca84b4a983ef0ea40","submitted_at":"2026-05-11T06:17:18Z","author_association":"MEMBER"}]
+```
+
+---
+
+## Assistant (Plan · Claude Opus 4.6 · 81.4s)
+
+_Thinking:_
+
+I now have a comprehensive view of the PR. Let me analyze it critically. The PR already has 3 approvals. Let me examine what was done and identify areas for improvement.
+
+The PR moves PDP Recom navigation logic from `ProductDetailDispatcher` (in the `pdp` feature module) to `PDPCoordinator` (in the `app` module). It creates a new `ProductDetailRecomDispatcher` class and removes recom-related logic from the legacy dispatcher.
+
+Let me think critically about the code:
+
+1. **Architecture** - The refactoring moves coordination logic to `PDPCoordinator`, which is its proper place. 
+
+2. **ProductDetailRecomDispatcher** - This is a very thin wrapper that essentially just launches an intent without any abstraction layer.
+
+3. **Tests** - The test coverage follows existing patterns in the codebase.
+
+Looking at the specifics, I notice a couple of things. The test mocks use `relaxUnitFun = true`, which aligns with existing patterns in this test file for the old and new dispatchers, though the project guidelines discourage `mockk(relaxed = true)`. This isn't new behavior being introduced. There's also something about `isPd` that appears to be cut off, but I should examine what the actual concern is there.
+
+The `isPdpRecomEnabled` property is computed on every access, calling the use case each time. If that use case is just a simple config check it's probably fine, but if it's doing something expensive that could be problematic. Additionally, the position index calculation that was moved from the old dispatcher to the coordinator has some tricky 1-indexed semantics that I need to keep in mind—this complexity existed before but is now in a different location.
+
+There's also some inefficiency where we filter the products list even when we're opening the recommendation flow, but then we don't actually use that filtered list since the recom handler works directly with the current product. It's wasted computation. Finally, the `coordinate` function now has default parameters for the recommendation flag and callback, which makes the API more flexible but adds some implicit behavior to track. The position indexing logic is confusing—when position is null or 0, both default to index 0, but position 1 also resolves to index 0, suggesting it's meant for 1-indexed positions but the implementation is unclear. The test for `ProductDetailRecomDispatcherTest` is minimal, only verifying that `startActivity` gets called without checking the intent extras or target activity class.
+
+Looking at the broader code, the PR description lacks reproduction steps and is quite sparse. The `coordinate` function has accumulated more responsibilities beyond just choosing between new and legacy PDP implementations.
+
+I'm also noticing that `isRecomEligible()` is embedded as an extension function in the coordinator itself, but this eligibility logic might belong in the domain layer or a shared utility if other parts of the app need to check it. There's also some import reordering in the test file that's just cleanup.
+
+Alright, I've got the full picture now. Let me give you an honest, critical review of this PR. 🐵
+
+---
+
+## PR Review: `[CATALOGO-40786] Updated PDP Recom's navigation to PDPCoordinator`
+
+**TL;DR**: The overall refactoring direction is correct -- moving routing decisions up to the coordinator is the right thing. But there are several things that could be improved, from architecture to test quality to edge-case handling.
+
+---
+
+### GOOD
+
+1. **Clean extraction**: Removing the recom responsibility from `ProductDetailDispatcher` into its own `ProductDetailRecomDispatcher` follows SRP. The old dispatcher was doing too much.
+
+2. **Coordinator is the right place**: Moving the "which PDP to open" decision to `PDPCoordinator` is architecturally sound -- that's literally what a coordinator is for.
+
+3. **The `when` block in `coordinate()`** is cleaner and more extensible than the previous `if/else`.
+
+4. **Tests were updated**: Existing tests were properly updated with the new mock, and new recom-specific tests were added. Good coverage of the happy paths.
+
+---
+
+### CRITICAL ISSUES
+
+#### 1. Business logic leaking into the Coordinator
+
+`PDPCoordinator.kt:66-69`:
+```kotlin
+private fun SimpleProductPDPUIModel.isRecomEligible(): Boolean =
+    (kind == ProductModel.Kind.GIFTCARD || kind == ProductModel.Kind.VGIFTCARD) && type == ProductType.BUNDLE
+```
+
+This is **domain-level business logic** (what constitutes a "recom-eligible" product) embedded directly in a presentation-layer coordinator. If any other part of the app needs to determine recom eligibility, this logic gets duplicated. This should live in the domain layer -- possibly as part of `IsProductDetailRecomEnabledUseCase` or a separate use case like `IsProductRecomEligibleUseCase`. The coordinator should just ask the domain layer "should I open recom?" rather than inspecting product internals itself.
+
+#### 2. `openRelated()` silently ignores recom entirely
+
+The recom logic was added only to `open()`, but `openRelated()` still calls `coordinate()` with the default `shouldOpenRecom = false` and `recomPdp = {}`. If a user navigates to a related gift card bundle, it will **not** go through the recom flow. Is this intentional? If so, there's no test covering that explicit decision. If not, it's a bug.
+
+#### 3. Unnecessary computation when `shouldOpenRecom` is true
+
+`PDPCoordinator.kt:91-92`:
+```kotlin
+val shouldOpenRecom = isRecomEnabled && currentProduct.isRecomEligible()
+val filteredProducts = if (isRecomEnabled) simpleProducts.filterRecomProducts() else simpleProducts
+```
+
+When `shouldOpenRecom` is true, the `filteredProducts` list is computed but **never used** -- the recom path uses `currentProduct` directly. You're filtering a list for nothing. Move the filtering inside the non-recom branch or make it lazy.
+
+---
+
+### MEDIUM ISSUES
+
+#### 4. `coordinate()` function signature is getting bloated
+
+```kotlin
+private inline fun coordinate(
+    context: Context?,
+    shouldOpenRecom: Boolean = false,
+    recomPdp: (Context) -> Unit = {},
+    newPdp: (Context) -> Unit,
+    legacyPdp: () -> Unit
+)
+```
+
+You now have 5 params, 2 of which have defaults. The function was originally a clean binary decision (new vs legacy). With the defaults on `shouldOpenRecom` and `recomPdp`, the `openRelated()` call silently opts out of recom. This is fragile -- if you add a 4th routing option tomorrow, the function signature grows again. Consider whether a sealed class/enum-based routing decision would be cleaner.
+
+#### 5. `ProductDetailRecomDispatcherTest` is too thin
+
+```kotlin
+@Test
+fun `GIVEN a product WHEN open is called THEN startActivity is called`() {
+    justRun { context.startActivity(any()) }
+    val product = SimpleProductPDPUIModel(productId = 1L)
+    dispatcher.open(context = context, product = product)
+    verify(exactly = 1) { context.startActivity(any()) }
+}
+```
+
+This test only verifies `startActivity` was called. It does **not** verify:
+- The intent targets `ProductDetailRecomActivity::class.java`
+- The intent contains the product in the `GIFT_CARD_PRODUCT_BUNDLE_KEY` extra
+- The correct product is passed
+
+For a dispatcher whose **only job** is to build the right intent, you should be verifying the intent content. Using a `slot<Intent>()` capture would let you assert on the intent's component and extras.
+
+#### 6. `isPdpRecomEnabled` as a computed property
+
+```kotlin
+private val isPdpRecomEnabled: Boolean
+    get() = isProductDetailRecomEnabledUseCase()
+```
+
+This calls the use case on every property access. If the use case is cheap (remote config lookup), fine. But this is a property that reads like a cached value while actually being a function call. Consider either making it an explicit function call (`isPdpRecomEnabled()`) for clarity, or caching the result. The current syntax is misleading.
+
+#### 7. Confusing `position` semantics
+
+```kotlin
+val currentProduct = simpleProducts[(position?.minus(1)?.takeUnless { it < 0 }) ?: 0]
+```
+
+This was moved from the old dispatcher as-is. The semantics are hard to follow: position seems 1-indexed in some callers, null in others, and the conversion is done inline. This line deserves at least a comment explaining the indexing convention, or better yet, extract it to a named helper function.
+
+---
+
+### MINOR NITS
+
+#### 8. PR description is sparse
+No steps to reproduce/test, no environment specified, no media. The PR template asks for these. For a PR that changes navigation flow for gift card bundles, you should have test steps explaining how to verify the recom vs non-recom paths.
+
+#### 9. `relaxUnitFun = true` on mocks
+In `PDPCoordinatorTest.kt`:
+```kotlin
+private val recomDispatcher: ProductDetailRecomDispatcher = mockk(relaxUnitFun = true)
+```
+This is consistent with how the other dispatchers are mocked in this test, but per project rules explicit mocking is preferred over relaxed. You get away with it because the existing tests already used this pattern, but ideally all dispatchers would use explicit mocks.
+
+#### 10. Missing negative test: `position = null` with recom
+There's no test where `position` is null and the product is recom-eligible. The index calculation `(null?.minus(1)?.takeUnless { it < 0 }) ?: 0` defaults to 0, but this specific case isn't tested for the recom path.
+
+---
+
+### Summary
+
+| Severity | Count | Summary |
+|----------|-------|---------|
+| Critical | 3 | Business logic in coordinator, `openRelated` ignoring recom, wasted computation |
+| Medium | 4 | Bloated coordinate(), thin test, misleading property, confusing position |
+| Minor | 3 | Sparse PR desc, relaxed mocks, missing edge test |
+
+The refactoring direction is solid, but the execution has some gaps. The biggest concern is the business logic placement -- the coordinator should delegate "is this product recom-eligible?" to the domain layer, not own that logic itself. And the `openRelated()` gap needs explicit documentation or a fix.
+
+Want me to go deeper into any of these points? 🍌
+
+---
+
+

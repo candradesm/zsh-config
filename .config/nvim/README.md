@@ -4,7 +4,7 @@ Complete LazyVim configuration with Android/Kotlin development support.
 
 ## Features
 
-- **Kotlin & Java LSP** — autocomplete, goto definition, refactoring, hover docs
+- **Kotlin & Java LSP** — autocomplete, goto definition, refactoring, hover docs (auto-switches between fwcd and JetBrains LSP based on Kotlin version)
 - **Android Development** — SDK detection, XML layout support
 - **Auto-formatting** — ktlint for Kotlin, google-java-format for Java (on save)
 - **Debugging** — Kotlin debugger with attach-to-process support
@@ -90,6 +90,51 @@ The file `lua/plugins/android-extras.lua` contains disabled-by-default plugins f
 
 Uncomment the sections you want in that file to enable them.
 
+## Kotlin LSP (Version-Based Switching)
+
+This configuration automatically selects the appropriate Kotlin LSP based on your project's Kotlin version:
+
+| Kotlin Version | LSP Server | Source |
+|---------------|------------|--------|
+| ≤ 2.2.x | `kotlin-language-server` (fwcd) | Installed via Mason (automatic) |
+| ≥ 2.3.0 | `kotlin-lsp` (JetBrains) | Installed via Mason (automatic) |
+
+### How It Works
+
+- The config detects the Kotlin version from your project's Gradle files (`libs.versions.toml`, `build.gradle.kts`, `build.gradle`, or `gradle.properties`)
+- If Kotlin ≥ 2.3 **and** the `kotlin-lsp` binary is installed, the JetBrains LSP is used
+- Otherwise, the fwcd `kotlin-language-server` is used as fallback
+- Both servers are never active simultaneously on the same project
+
+### Installing JetBrains kotlin-lsp
+
+Both Kotlin LSP servers are installed **automatically via Mason** when Neovim starts. No manual installation is required.
+
+For JetBrains kotlin-lsp setup details, see [docs/kotlin-lsp-setup.md](docs/kotlin-lsp-setup.md).
+
+> [!WARNING]
+> The JetBrains kotlin-lsp is in **pre-alpha** stage. It works for JVM Gradle projects but may have rough edges.
+
+If Mason fails to install `kotlin-lsp`, you can install it manually via Homebrew as a fallback:
+
+```bash
+# macOS / Linux (Homebrew) — only if Mason fails
+brew install JetBrains/utils/kotlin-lsp
+```
+
+Requirements:
+- Java 17+
+- Neovim 0.10+ (required for pull-based diagnostics)
+- Gradle JVM project (KMP, Maven not yet supported)
+
+### Verifying Which LSP Is Active
+
+The statusline shows which Kotlin LSP is attached to the current buffer:
+- **`KLS:JB`** (green) — JetBrains kotlin-lsp is active (Kotlin ≥ 2.3)
+- **`KLS:fwcd`** (blue) — fwcd kotlin-language-server is active (Kotlin ≤ 2.2)
+
+You can also run `:LspInfo` to see detailed server information.
+
 ## Troubleshooting
 
 ### Kotlin LSP not working
@@ -100,5 +145,8 @@ Uncomment the sections you want in that file to enable them.
 
 ### Version compatibility
 
-- kotlin-language-server (fwcd) supports Kotlin ≤ 2.2.x
-- For Kotlin 2.3.0+, consider switching to official `Kotlin/kotlin-lsp`
+- **Kotlin ≤ 2.2.x** — uses `kotlin-language-server` (fwcd), installed automatically via Mason
+- **Kotlin ≥ 2.3.0** — uses `kotlin-lsp` (JetBrains), installed automatically via Mason
+- If version detection fails, fwcd server is used as safe fallback
+- Version is auto-detected from Gradle files (libs.versions.toml, settings.gradle.kts, build.gradle.kts, build.gradle, gradle.properties)
+- The statusline shows `KLS:JB` or `KLS:fwcd` to indicate which server is active
