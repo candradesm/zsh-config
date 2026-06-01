@@ -27,6 +27,7 @@ interface CopilotQuotaInfo {
   overagePermitted: boolean
   unlimited: boolean
   planType: "free" | "paid"
+  quotaType: "premium" | "ai_credits"
 }
 
 interface MessagePart {
@@ -226,7 +227,7 @@ async function fetchQuotaInfo(token: string): Promise<CopilotQuotaInfo | null> {
       headers: {
         Authorization: `Bearer ${token}`,
         Accept: "application/json",
-        "X-GitHub-Api-Version": "2025-05-01",
+        "X-GitHub-Api-Version": "2026-03-10",
         "User-Agent": "opencode-copilot-usage-plugin",
       },
     })
@@ -240,8 +241,8 @@ async function fetchQuotaInfo(token: string): Promise<CopilotQuotaInfo | null> {
     const data = await response.json()
     log("fetchQuotaInfo: copilot_plan:", data?.copilot_plan)
 
-    // Paid plan: quota_snapshots.premium_interactions
-    const snapshot = data?.quota_snapshots?.premium_interactions
+    // Paid plan: try premium_models (AI Credits) first, fall back to premium_interactions (legacy)
+    const snapshot = data?.quota_snapshots?.premium_models ?? data?.quota_snapshots?.premium_interactions
     if (snapshot) {
       return {
         percentRemaining: snapshot.percent_remaining ?? 100,
@@ -250,6 +251,7 @@ async function fetchQuotaInfo(token: string): Promise<CopilotQuotaInfo | null> {
         overagePermitted: snapshot.overage_permitted ?? false,
         unlimited: snapshot.unlimited ?? false,
         planType: "paid",
+        quotaType: data?.quota_snapshots?.premium_models ? "ai_credits" : "premium",
       }
     }
 
@@ -266,6 +268,7 @@ async function fetchQuotaInfo(token: string): Promise<CopilotQuotaInfo | null> {
         overagePermitted: false,
         unlimited: false,
         planType: "free",
+        quotaType: "premium",
       }
     }
 
@@ -791,7 +794,7 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
           {sessionLoading() ? (
             <text fg={props.api.theme.current?.muted ?? "#888888"}>Loading...</text>
           ) : (
-            <text fg="#ffffff">{sessionUsage().toFixed(2)} {quotaInfo()?.planType === "free" ? "chat requests" : "premium requests"}</text>
+            <text fg="#ffffff">{sessionUsage().toFixed(2)} {quotaInfo()?.planType === "free" ? "chat requests" : quotaInfo()?.quotaType === "ai_credits" ? "AI Credits" : "premium requests"}</text>
           )}
           <text fg={props.api.theme.current?.muted ?? "#888888"}>Cost estimation</text>
           {isActiveModelDeprecated() && (
