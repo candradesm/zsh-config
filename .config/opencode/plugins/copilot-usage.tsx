@@ -23,6 +23,7 @@ interface CopilotConfig {
 interface CopilotQuotaInfo {
   percentRemaining: number
   entitlement: number
+  remaining: number
   overageCount: number
   overagePermitted: boolean
   unlimited: boolean
@@ -250,6 +251,7 @@ async function fetchQuotaInfo(token: string): Promise<CopilotQuotaInfo | null> {
       return {
         percentRemaining: snapshot.percent_remaining ?? 100,
         entitlement: snapshot.entitlement ?? 0,
+        remaining: snapshot.remaining ?? 0,
         overageCount: snapshot.overage_count ?? 0,
         overagePermitted: snapshot.overage_permitted ?? false,
         unlimited: snapshot.unlimited ?? false,
@@ -268,6 +270,7 @@ async function fetchQuotaInfo(token: string): Promise<CopilotQuotaInfo | null> {
       return {
         percentRemaining,
         entitlement: chatMonthly,
+        remaining: chatRemaining,
         overageCount: 0,
         overagePermitted: false,
         unlimited: false,
@@ -316,6 +319,12 @@ function getUsageColor(percentage: number): string {
 
 function formatCostLine(arrow: string, tokens: number, cost: number): string {
   return `${arrow} ${tokens.toLocaleString()} tokens`.padEnd(26) + `$${cost.toFixed(2)}`
+}
+
+function getQuotaLabel(quota: CopilotQuotaInfo): string {
+  if (quota.planType === "free") return "chat requests"
+  if (quota.quotaType === "ai_credits") return "AI Credits"
+  return "premium requests"
 }
 
 function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
@@ -823,6 +832,9 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
             <box flexDirection="column" gap={0}>
               <text fg={usageColor()}>{usagePercentage().toFixed(1)}% used</text>
               <text fg={usageColor()}>{buildProgressBar(usagePercentage())}</text>
+              <text fg="#ffffff">
+                {(quotaInfo()!.entitlement - quotaInfo()!.remaining).toLocaleString()} / {quotaInfo()!.entitlement.toLocaleString()} {getQuotaLabel(quotaInfo()!)}
+              </text>
             </box>
           ) : quotaLoading() ? (
             <text fg="#888888">Loading...</text>
