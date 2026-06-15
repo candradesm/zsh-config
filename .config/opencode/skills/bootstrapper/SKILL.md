@@ -101,7 +101,7 @@ This is the **only required skill**. The qa.md subagent depends on it.
 ```markdown
 ---
 name: quality-check
-description: CRITICAL: Load BEFORE opening any PR. Missing this = failing gates and rejected PRs. Validates build, lint, tests. Pre-PR only.
+description: "CRITICAL: Load BEFORE opening any PR. Missing this = failing gates and rejected PRs. Validates build, lint, tests. Pre-PR only."
 ---
 
 ## When to use me
@@ -178,7 +178,7 @@ When an instruction file is too dense to condense, create a lightweight skill th
 ```markdown
 ---
 name: data-layer
-description: CRITICAL: Load when touching *UseCase.kt, *Repository.kt, *DataSource.kt, or *Mapper.kt. Wrong naming or broken layer boundaries = immediate PR rejection.
+description: "CRITICAL: Load when touching *UseCase.kt, *Repository.kt, *DataSource.kt, or *Mapper.kt. Wrong naming or broken layer boundaries = immediate PR rejection."
 ---
 
 ## When to use me
@@ -219,7 +219,7 @@ Every skill MUST follow this format. The `description` field is CRITICAL — it 
 ```markdown
 ---
 name: skill-name
-description: {CRITICAL/IMPORTANT}: Load when {trigger}. {What it covers}. {Consequence of not loading}.
+description: "{CRITICAL/IMPORTANT}: Load when {trigger}. {What it covers}. {Consequence of not loading}."
 ---
 
 ## When to use me
