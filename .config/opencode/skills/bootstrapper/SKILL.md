@@ -1,6 +1,6 @@
 ---
 name: bootstrapper
-description: CRITICAL: Load when onboarding a NEW repo that lacks skills. Scans the repo via GitHub MCP, detects tech stack, reads existing .github/instructions/ if any, and generates workflow-level skills in .agents/skills/. Works for ANY language/framework. Self-contained — no external dependencies.
+description: "CRITICAL: Load when onboarding a NEW repo that lacks skills. Scans the repo via GitHub MCP, detects tech stack, reads existing .github/instructions/ if any, and generates workflow-level skills in .agents/skills/. Works for ANY language/framework. Self-contained — no external dependencies."
 ---
 
 ## When to use me

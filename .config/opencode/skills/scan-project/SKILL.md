@@ -1,6 +1,6 @@
 ---
 name: scan-project
-description: IMPORTANT: Load when starting work on a project you haven't seen before. Scans the local workspace to understand project structure, tech stack, and existing documentation. Creates a memory bank in .memory/ for future sessions.
+description: "IMPORTANT: Load when starting work on a project you haven't seen before. Scans the local workspace to understand project structure, tech stack, and existing documentation. Creates a memory bank in .memory/ for future sessions."
 ---
 
 ## When to use me
