@@ -1,15 +1,14 @@
 ---
 name: bootstrapper
-description: CRITICAL: Load when onboarding a NEW repo that lacks documentation. Scans the repo via GitHub MCP, detects tech stack, creates .github/copilot-instructions.md + .github/instructions/ files, then generates workflow-level skills in .agents/skills/. Works for ANY language/framework. Self-contained — no external dependencies.
+description: CRITICAL: Load when onboarding a NEW repo that lacks skills. Scans the repo via GitHub MCP, detects tech stack, reads existing .github/instructions/ if any, and generates workflow-level skills in .agents/skills/. Works for ANY language/framework. Self-contained — no external dependencies.
 ---
 
 ## When to use me
-- When starting work on a repo with no `.github/copilot-instructions.md`
-- When a repo has no `.github/instructions/` directory
-- When you need to scaffold documentation + skills for a new project
+- When a repo has no `.agents/skills/` directory
+- When you need to scaffold skills from existing instructions or tech stack
 
 ## Not intended for
-- Updating existing docs → read them first, ask user what to change
+- Updating existing skills → read them first, ask user what to change
 - Day-to-day coding → use project-specific skills instead
 - Code review → use `code-review`
 
@@ -17,20 +16,15 @@ description: CRITICAL: Load when onboarding a NEW repo that lacks documentation.
 
 ## Phase 0 — Verify Need (MANDATORY)
 
-Before doing ANYTHING, check if docs already exist:
+Before doing anything, check what already exists:
 
-```bash
-# Check for copilot instructions
-github_get_file_contents(owner, repo, ".github/copilot-instructions.md")
-
-# Check for instruction files
-github_get_file_contents(owner, repo, ".github/instructions/")
-
-# Check for existing skills
+```
 github_get_file_contents(owner, repo, ".agents/skills/")
+github_get_file_contents(owner, repo, ".github/instructions/")
 ```
 
-If `.github/copilot-instructions.md` exists → **STOP and ASK user** what they want to do. Never overwrite without explicit permission.
+- If `.agents/skills/` exists → **STOP and ASK user** what they want to do. Never overwrite without permission.
+- If `.github/instructions/` exists → note file paths, they'll be used as source material in Phase 2.
 
 ---
 
@@ -92,149 +86,11 @@ Look for:
 
 ---
 
-## Phase 2 — Create Documentation
+## Phase 2 — Create Skills
 
-**IMPORTANT**: This phase is flexible. Adapt to the project — don't force templates that don't fit.
+Create `.agents/skills/` with workflow-level skills derived from tech stack detection and any existing instruction files found in Phase 0.
 
-### Option A: Use scan-project Skill (RECOMMENDED)
-
-If the project is accessible locally (not remote-only), load the `scan-project` skill first. It will:
-1. Scan the local workspace structure
-2. Detect tech stack from build files
-3. Create a memory bank in `.memory/`
-
-Then use that info to create the documentation files below.
-
-### Option B: Scan via GitHub MCP
-
-If the project is remote-only, use Phase 1 discovery results directly.
-
----
-
-### Step 1: Create `.github/copilot-instructions.md`
-
-This is the **single source of truth** for the project. Always create this file.
-
-```markdown
-# {ProjectName} - Copilot Instructions
-
-## Project Overview
-
-**{ProjectName}** is a {description} written in {language}.
-
-### Key Information
-- **Language**: {language} {version}
-- **Build Tool**: {build_tool}
-- **Architecture**: {arch_pattern}
-- **Key Framework**: {main_framework}
-- **Test Coverage**: {test_count} tests
-
-### Main Features
-- {feature_1}
-- {feature_2}
-
-## Technical Summary
-
-### Architecture Patterns
-- {pattern_1}
-- {pattern_2}
-
-### Project Structure
-```
-{directory_tree_with_comments}
-```
-
-### Key Libraries
-- {lib_1}: {purpose}
-- {lib_2}: {purpose}
-
-## Working with This Project
-
-### Before Starting
-1. Read `.github/instructions/` for topic-specific guidance
-2. Verify {language} {version} is installed
-3. {project_specific_prereq}
-
-### Common Tasks
-- **Build**: `{build_command}`
-- **Test**: `{test_command}`
-- **Lint**: `{lint_command}`
-
-### Adding New Features
-1. Follow {arch_pattern} patterns
-2. Use {di_framework} for dependency injection
-3. Write tests for new functionality
-4. Ensure {linter} compliance
-
-## Related Documentation
-{list_of_created_instruction_files}
-```
-
----
-
-### Step 2: Detect and Create Instruction Files
-
-Analyze the project from Phase 1 and create `{topic}.instructions.md` files for each meaningful topic. **Don't create files for topics that don't apply.**
-
-Use your judgment — if the project has a linter, create `code-style`. If it has Docker, create `docker`. If it uses a database, create `database`. There's no fixed list.
-
-### Instruction File Format Guideline
-
-Each `{topic}.instructions.md` should follow this structure:
-
-```markdown
-# {Topic} Instructions
-
-## Overview
-
-{What this topic covers in this project — 2-3 sentences max}
-
-## {Section1}
-
-{Content — use code blocks, tables, lists as needed}
-
-## {Section2}
-
-{Content}
-
-## Best Practices
-1. {practice}
-2. {practice}
-
-## Common Pitfalls
-1. {pitfall} → {fix}
-```
-
-**Rules:**
-- Title: `# {Topic} Instructions` (one line)
-- Overview: Short description of scope
-- Sections: As many as needed — adapt to the topic
-- Best Practices: Always include 3-5 actionable items
-- Common Pitfalls: Always include — helps new contributors
-- Use code blocks, tables, and lists freely
-- Keep it scannable — agent reads these fast
-
-### Step 3: Update copilot-instructions.md
-
-After creating instruction files, update the `## Related Documentation` section in `.github/copilot-instructions.md` to list all created files:
-
-```markdown
-## Related Documentation
-- **{Topic1}**: `.github/instructions/{topic1}.instructions.md`
-- **{Topic2}**: `.github/instructions/{topic2}.instructions.md`
-```
-
----
-
-## Phase 3 — Create Skills
-
-Create `.agents/skills/` with workflow-level skills derived from the instruction files created in Phase 2.
-
-**Relationship**: Each skill is a **condensed, actionable version** of a single instruction file. One instruction file can spawn multiple skills, but a skill only ever refers to one instruction file.
-
-```
-.instructions.md (full context)  →  .agents/skills/name/SKILL.md (actionable cheat sheet)
-```
+**Relationship**: Each skill is a **condensed, actionable version** of a single topic. If `.github/instructions/{topic}.instructions.md` exists, use it as source material — extract commands, rules, and checklists. If no instruction file exists for a topic, derive the skill directly from Phase 1 discovery.
 
 ---
 
@@ -297,11 +153,11 @@ Never run in parallel. Don't test code that doesn't compile.
 
 ---
 
-### Step 2: Derive Skills from Instruction Files
+### Step 2: Derive Skills from Discovery and Instructions
 
-For each `{topic}.instructions.md` created in Phase 2, create at least one skill.
+For each topic detected in Phase 1 (or each instruction file found in Phase 0), create at least one skill.
 
-**Rule**: Every instruction file MUST have a corresponding skill. No exceptions.
+**Rule**: If `.github/instructions/{topic}.instructions.md` exists, it MUST have a corresponding skill. No exceptions.
 
 For each instruction, decide the skill density:
 
@@ -432,29 +288,26 @@ When the instruction file is too dense to condense, create a lightweight pointer
 
 ---
 
-## Phase 4 — Verify
+## Phase 3 — Verify
 
-After creating all files, verify:
+After creating all skills, verify:
 
 ```bash
-# Check created structure
-ls -la .github/copilot-instructions.md
-ls -la .github/instructions/
 ls -la .agents/skills/
 ```
 
 Report to user:
 1. What was detected (tech stack, architecture)
-2. What was created (files and skills)
+2. What skills were created
 3. What they should review before proceeding
 
 ---
 
 ## Anti-patterns
 
-1. **Overwriting existing docs** — Always check first, ask user
+1. **Overwriting existing skills** — Always check first, ask user
 2. **Creating too many skills** — Only create what makes sense
 3. **Generic descriptions** — Be specific about when to load each skill
 4. **Missing quality-check** — This breaks the qa.md workflow
 5. **References to external files** — This skill must be self-contained
-6. **Merging instructions into one skill** — One skill → one instruction file only
+6. **Merging unrelated topics into one skill** — Each skill covers one topic only
