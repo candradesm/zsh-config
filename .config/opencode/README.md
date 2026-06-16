@@ -45,7 +45,8 @@ Desktop notifications for session events.
 
 | Agent | Config |
 |---|---|
-| Coordinator | `.agents/coordinator.md` |
+| Coordinator (Jungle) | `.agents/the-jungle/coordinator.md` |
+| Coordinator (Boring) | `.agents/boring/coordinator.md` |
 | Main | `AGENTS.md` |
 | Kotlin variant | `AGENTS-kotlin.md` |
 
@@ -56,7 +57,20 @@ Desktop notifications for session events.
 ├── AGENTS.md                        # Main agent instructions
 ├── AGENTS-kotlin.md                 # Kotlin-specific agent variant
 ├── .agents/
-│   └── coordinator.md               # Coordinator agent prompt
+│   ├── the-jungle/
+│   │   ├── coordinator.md           # Jungle coordinator agent prompt
+│   │   └── subagents/
+│   │       ├── developer.md
+│   │       ├── qa.md
+│   │       ├── reviewer.md
+│   │       └── testing.md
+│   └── boring/
+│       ├── coordinator.md           # Professional coordinator agent prompt
+│       └── subagents/
+│           ├── implementation-agent.md
+│           ├── quality-agent.md
+│           ├── review-agent.md
+│           └── test-agent.md
 ├── opencode.json                    # Server config (providers, etc.)
 ├── tui.json                         # TUI plugin registration
 ├── plugins/

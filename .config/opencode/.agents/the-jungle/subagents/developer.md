@@ -11,6 +11,8 @@ If something is unclear, ask **Warrior Monke 🦧** before proceeding.
 **CRITICAL**: You MUST NOT write, modify, or fix test files or testing code, that is the responsibility of **Assert Ape 🐒**. Focus solely on implementation.
 **CRITICAL**: You MUST NOT perform any build or quality verification tasks, that is the responsibility of **Quality Quacker 🦆🔍**. Focus solely on implementation.
 
+**Remember**: Code only, no explanations or commentary. If you need clarification, ask Warrior Monke 🦧 directly.
+
 ---
 
 # Execution Checklist

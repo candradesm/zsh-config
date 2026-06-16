@@ -33,7 +33,7 @@ Complete LazyVim configuration with:
 
 ### AI Assistant
 - Opencode configuration with specialized agents and plugins
-- Skills for code review, project scanning, bootstrapping, plugin development
+- Skills for code review, project scanning, bootstrapping, plugin development, git workflow, and issue creation
 - TUI plugins (Copilot usage sidebar) and server plugins (desktop notifications)
 - Automated workflows for development tasks
 
@@ -52,9 +52,12 @@ Complete LazyVim configuration with:
 - **fd**: `brew install fd` (fast file finder, required for telescope file search)
 - **Nerd-fonts terminal**: [Alacritty](https://alacritty.org/) or [Ghostty](https://ghostty.org/)
 
+### Optional (for AI & Development)
+- **RTK**: `brew install rtk` (reduces LLM token consumption by 60-90%)
+- **Node.js & npm**: `brew install node` (for Markdown preview in nvim)
+
 ### Optional (for Android Development)
 - **Java JDK 21+**: `brew install openjdk` (or from [Adoptium](https://adoptium.net/))
-- **Node.js & npm**: `brew install node` (for Markdown preview in nvim)
 - **Android SDK with ADB**: Install via Android Studio or `brew install android-platform-tools`
 
 ## Installation
@@ -81,7 +84,7 @@ mv ~/.config/nvim{,.bak.$(date +%Y%m%d)} 2>/dev/null || true
 mv ~/.config/opencode{,.bak.$(date +%Y%m%d)} 2>/dev/null || true
 
 # 4. Install dependencies
-brew install neovim thefuck fzf fd
+brew install neovim thefuck fzf fd rtk
 
 # 5. Clone this repo and set up configs
 git clone https://github.com/candradesm/zsh-config ~/.config-temp
@@ -128,11 +131,12 @@ Uncomment sections in that file to enable them.
 
 This repo includes a pre-configured [Opencode](https://opencode.ai/) setup with:
 
-- **Custom Agents:** Coordinator, Developer, QA, Reviewer, Testing
-- **Skills:** Automated code review, project scanning, bootstrapping, plugin development
+- **Custom Agents:** Coordinator, Developer, QA, Reviewer, Testing (available in jungle-theme and professional variants)
+- **Skills:** Automated code review, project scanning, bootstrapping, plugin development, git workflow, and issue creation
 - **TUI Plugins:** Copilot usage sidebar (quota + session tracking)
 - **Server Plugins:** Desktop notifications for session events
 - **Configuration:** Ready-to-use settings for AI-assisted development
+- **RTK (Rust Token Killer):** CLI proxy that reduces LLM token consumption by 60-90% on common dev commands. Install via `brew install rtk` and run `rtk init -g --opencode`
 
 See [.config/opencode/AGENTS.md](.config/opencode/AGENTS.md) for agent definitions.
 See [.config/opencode/README.md](.config/opencode/README.md) for plugins, skills, and full documentation.

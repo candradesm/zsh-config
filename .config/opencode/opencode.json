@@ -40,7 +40,7 @@
     "coordinator": {
       "description": "Warrior Monke 🦧 — THE JUNGLE coordinator. Analyzes tasks, creates plans, and delegates to subagents.",
       "mode": "primary",
-      "prompt": "{file:./.agents/coordinator.md}",
+      "prompt": "{file:./.agents/the-jungle/coordinator.md}",
       "tools": {
         "write": false,
         "edit": false,
@@ -52,7 +52,7 @@
       "mode": "subagent",
       "model": "opencode-go/kimi-k2.5",
       "temperature": 0.2,
-      "prompt": "{file:./.agents/subagents/developer.md}",
+      "prompt": "{file:./.agents/the-jungle/subagents/developer.md}",
       "tools": {
         "write": true,
         "edit": true,
@@ -64,7 +64,7 @@
       "mode": "subagent",
       "model": "opencode-go/minimax-m2.5",
       "temperature": 0,
-      "prompt": "{file:./.agents/subagents/qa.md}",
+      "prompt": "{file:./.agents/the-jungle/subagents/qa.md}",
       "tools": {
         "write": false,
         "edit": false,
@@ -76,7 +76,7 @@
       "mode": "subagent",
       "model": "opencode-go/glm-5",
       "temperature": 0,
-      "prompt": "{file:./.agents/subagents/reviewer.md}",
+      "prompt": "{file:./.agents/the-jungle/subagents/reviewer.md}",
       "tools": {
         "write": false,
         "edit": false,
@@ -88,7 +88,7 @@
       "mode": "subagent",
       "model": "opencode-go/kimi-k2.5",
       "temperature": 0,
-      "prompt": "{file:./.agents/subagents/testing.md}",
+      "prompt": "{file:./.agents/the-jungle/subagents/testing.md}",
       "tools": {
         "write": true,
         "edit": true,
