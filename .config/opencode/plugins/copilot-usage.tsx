@@ -6,7 +6,7 @@ import { mkdirSync, appendFileSync } from "node:fs"
 
 const QUOTA_REFRESH_MS = 5 * 60 * 1000
 const MAX_POLL_ATTEMPTS = 30
-const PLUGIN_VERSION = "v33"
+const PLUGIN_VERSION = "v35"
 
 interface TokenPrice {
   input: number
@@ -23,11 +23,13 @@ interface CopilotConfig {
 interface CopilotQuotaInfo {
   percentRemaining: number
   entitlement: number
+  remaining: number
   overageCount: number
   overagePermitted: boolean
   unlimited: boolean
   planType: "free" | "paid"
   quotaType: "premium" | "ai_credits"
+  tokenBasedBilling: boolean
 }
 
 interface MessagePart {
@@ -227,7 +229,7 @@ async function fetchQuotaInfo(token: string): Promise<CopilotQuotaInfo | null> {
       headers: {
         Authorization: `Bearer ${token}`,
         Accept: "application/json",
-        "X-GitHub-Api-Version": "2026-03-10",
+        "X-GitHub-Api-Version": "2026-06-01",
         "User-Agent": "opencode-copilot-usage-plugin",
       },
     })
@@ -241,17 +243,21 @@ async function fetchQuotaInfo(token: string): Promise<CopilotQuotaInfo | null> {
     const data = await response.json()
     log("fetchQuotaInfo: copilot_plan:", data?.copilot_plan)
 
-    // Paid plan: try premium_models (AI Credits) first, fall back to premium_interactions (legacy)
+    // Paid plan: try premium_models first, fall back to premium_interactions.
+    // AI Credits detection: check snapshot.token_based_billing or root token_based_billing flag
+    // (GitHub migrated from count-based "premium requests" to token-based "AI Credits").
     const snapshot = data?.quota_snapshots?.premium_models ?? data?.quota_snapshots?.premium_interactions
     if (snapshot) {
       return {
         percentRemaining: snapshot.percent_remaining ?? 100,
         entitlement: snapshot.entitlement ?? 0,
+        remaining: snapshot.remaining ?? 0,
         overageCount: snapshot.overage_count ?? 0,
         overagePermitted: snapshot.overage_permitted ?? false,
         unlimited: snapshot.unlimited ?? false,
         planType: "paid",
-        quotaType: data?.quota_snapshots?.premium_models ? "ai_credits" : "premium",
+        quotaType: (data?.quota_snapshots?.premium_models || snapshot.token_based_billing || data?.token_based_billing) ? "ai_credits" : "premium",
+        tokenBasedBilling: !!(snapshot.token_based_billing || data?.token_based_billing),
       }
     }
 
@@ -264,11 +270,13 @@ async function fetchQuotaInfo(token: string): Promise<CopilotQuotaInfo | null> {
       return {
         percentRemaining,
         entitlement: chatMonthly,
+        remaining: chatRemaining,
         overageCount: 0,
         overagePermitted: false,
         unlimited: false,
         planType: "free",
         quotaType: "premium",
+        tokenBasedBilling: false,
       }
     }
 
@@ -311,6 +319,12 @@ function getUsageColor(percentage: number): string {
 
 function formatCostLine(arrow: string, tokens: number, cost: number): string {
   return `${arrow} ${tokens.toLocaleString()} tokens`.padEnd(26) + `$${cost.toFixed(2)}`
+}
+
+function getQuotaLabel(quota: CopilotQuotaInfo): string {
+  if (quota.planType === "free") return "chat requests"
+  if (quota.quotaType === "ai_credits") return "AI Credits"
+  return "premium requests"
 }
 
 function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
@@ -790,11 +804,15 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
       {isCopilot() ? (
         <>
           <text fg={props.api.theme.current?.foreground ?? "#ffffff"}><strong>Github Copilot Usage</strong></text>
-          <text fg={props.api.theme.current?.muted ?? "#888888"}>Current Session</text>
-          {sessionLoading() ? (
-            <text fg={props.api.theme.current?.muted ?? "#888888"}>Loading...</text>
-          ) : (
-            <text fg="#ffffff">{sessionUsage().toFixed(2)} {quotaInfo()?.planType === "free" ? "chat requests" : quotaInfo()?.quotaType === "ai_credits" ? "AI Credits" : "premium requests"}</text>
+          {!quotaInfo()?.tokenBasedBilling && (
+            <>
+              <text fg={props.api.theme.current?.muted ?? "#888888"}>Current Session</text>
+              {sessionLoading() ? (
+                <text fg={props.api.theme.current?.muted ?? "#888888"}>Loading...</text>
+              ) : (
+                <text fg="#ffffff">{sessionUsage().toFixed(2)} {quotaInfo()?.planType === "free" ? "chat requests" : "premium requests"}</text>
+              )}
+            </>
           )}
           <text fg={props.api.theme.current?.muted ?? "#888888"}>Cost estimation</text>
           {isActiveModelDeprecated() && (
@@ -814,6 +832,9 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
             <box flexDirection="column" gap={0}>
               <text fg={usageColor()}>{usagePercentage().toFixed(1)}% used</text>
               <text fg={usageColor()}>{buildProgressBar(usagePercentage())}</text>
+              <text fg="#ffffff">
+                {(quotaInfo()!.entitlement - quotaInfo()!.remaining).toLocaleString()} / {quotaInfo()!.entitlement.toLocaleString()} {getQuotaLabel(quotaInfo()!)}
+              </text>
             </box>
           ) : quotaLoading() ? (
             <text fg="#888888">Loading...</text>
