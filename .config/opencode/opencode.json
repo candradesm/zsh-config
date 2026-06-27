@@ -40,19 +40,37 @@
     "coordinator": {
       "description": "Warrior Monke 🦧 — THE JUNGLE coordinator. Analyzes tasks, creates plans, and delegates to subagents.",
       "mode": "primary",
-      "prompt": "{file:./.agents/the-jungle/coordinator.md}",
+      "model": "opencode-go/kimi-k2.7-code",
+      "reasoningEffort": "high",
+      "prompt": "{file:./.agents/coordinator.md}",
       "tools": {
         "write": false,
         "edit": false,
         "bash": false
       }
     },
+    "explore": {
+      "model": "opencode-go/deepseek-v4-flash",
+      "reasoningEffort": "low"
+    },
     "developer": {
       "description": "Implementation agent that writes productive code and fixes bugs for the jungle",
       "mode": "subagent",
-      "model": "opencode-go/kimi-k2.5",
-      "temperature": 0.2,
-      "prompt": "{file:./.agents/the-jungle/subagents/developer.md}",
+      "model": "opencode-go/deepseek-v4-flash",
+      "reasoningEffort": "low",
+      "prompt": "{file:./.agents/subagents/developer.md}",
+      "tools": {
+        "write": true,
+        "edit": true,
+        "bash": true
+      }
+    },
+    "testing": {
+      "description": "Testing agent that creates tests for the jungle",
+      "mode": "subagent",
+      "model": "opencode-go/deepseek-v4-flash",
+      "reasoningEffort": "low",
+      "prompt": "{file:./.agents/subagents/testing.md}",
       "tools": {
         "write": true,
         "edit": true,
@@ -60,11 +78,11 @@
       }
     },
     "qa": {
-      "description": "QA agent that runs project checks before CI/CD and ensures the jungle is in good shape",
+      "description": "QA agent — executes JSON task lists from coordinator mechanically. Runs lint, build, tests. Reports pass/fail.",
       "mode": "subagent",
-      "model": "opencode-go/minimax-m2.5",
-      "temperature": 0,
-      "prompt": "{file:./.agents/the-jungle/subagents/qa.md}",
+      "model": "opencode-go/deepseek-v4-flash",
+      "reasoningEffort": "none",
+      "prompt": "{file:./.agents/subagents/qa.md}",
       "tools": {
         "write": false,
         "edit": false,
@@ -74,24 +92,12 @@
     "reviewer": {
       "description": "Reviewer agent that performs code reviews and provides feedback to the jungle",
       "mode": "subagent",
-      "model": "opencode-go/glm-5",
-      "temperature": 0,
-      "prompt": "{file:./.agents/the-jungle/subagents/reviewer.md}",
+      "model": "opencode-go/qwen3.7-plus",
+      "reasoningEffort": "medium",
+      "prompt": "{file:./.agents/subagents/reviewer.md}",
       "tools": {
         "write": false,
         "edit": false,
-        "bash": true
-      }
-    },
-    "testing": {
-      "description": "Testing agent that creates tests for the jungle",
-      "mode": "subagent",
-      "model": "opencode-go/kimi-k2.5",
-      "temperature": 0,
-      "prompt": "{file:./.agents/the-jungle/subagents/testing.md}",
-      "tools": {
-        "write": true,
-        "edit": true,
         "bash": true
       }
     }

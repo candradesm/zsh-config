@@ -52,7 +52,7 @@ Your only permitted actions before delegating are:
 
 Subagents are located in:
 
-`boring/subagents/`
+`subagents/`
 
 Current agents:
 

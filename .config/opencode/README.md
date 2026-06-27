@@ -4,6 +4,16 @@ Configuration for [OpenCode](https://opencode.ai/) — agents, plugins, skills, 
 
 ## Plugins
 
+### jungle-mode (Server + TUI)
+
+Jungle Mode plugin that injects a themed persona (Warrior Monke 🦧, Junior Monke Developer 🐵, Assert Ape 🐒, Quality Quacker 🦆🔍, GOAT Roaster 🐐) into chat messages based on the active agent. Enabled/disabled via `jungle-mode.json` config.
+
+**Server (`jungle-mode-server.ts`):** Hooks into `chat.message` to prepend the matching jungle persona to the message.
+
+**TUI (`jungle-mode.tsx`):** Sidebar, command, and prompt indicator for jungle mode status.
+
+**Files:** `plugins/jungle-mode-server.ts`, `plugins/jungle-mode.tsx`, `plugins/jungle-mode/`
+
 ### model-usage (TUI)
 
 Sidebar widget + `/usage` slash command showing token usage and quota across providers.
@@ -42,8 +52,11 @@ Desktop notifications for session events.
 
 | Agent | Config |
 |---|---|
-| Coordinator (Jungle) | `.agents/the-jungle/coordinator.md` |
-| Coordinator (Boring) | `.agents/boring/coordinator.md` |
+| Coordinator | `.agents/coordinator.md` |
+| Developer | `.agents/subagents/developer.md` |
+| Testing | `.agents/subagents/testing.md` |
+| QA | `.agents/subagents/qa.md` |
+| Reviewer | `.agents/subagents/reviewer.md` |
 | Main | `AGENTS.md` |
 | Kotlin variant | `AGENTS-kotlin.md` |
 
@@ -54,27 +67,22 @@ Desktop notifications for session events.
 ├── AGENTS.md                        # Main agent instructions
 ├── AGENTS-kotlin.md                 # Kotlin-specific agent variant
 ├── .agents/
-│   ├── the-jungle/
-│   │   ├── coordinator.md           # Jungle coordinator agent prompt
-│   │   └── subagents/
-│   │       ├── developer.md
-│   │       ├── qa.md
-│   │       ├── reviewer.md
-│   │       └── testing.md
-│   └── boring/
-│       ├── coordinator.md           # Professional coordinator agent prompt
-│       └── subagents/
-│           ├── implementation-agent.md
-│           ├── quality-agent.md
-│           ├── review-agent.md
-│           └── test-agent.md
+│   ├── coordinator.md               # Coordinator agent prompt (Jungle Mode)
+│   └── subagents/
+│       ├── developer.md             # Developer agent prompt
+│       ├── qa.md                    # QA agent prompt
+│       ├── reviewer.md              # Reviewer agent prompt
+│       └── testing.md               # Testing agent prompt
 ├── opencode.json                    # Server config (providers, etc.)
 ├── tui.json                         # TUI plugin registration
 ├── plugins/
+│   ├── jungle-mode.tsx              # TUI: jungle-mode UI components
+│   ├── jungle-mode-server.ts        # Server: chat.message hook for jungle persona injection
+│   ├── jungle-mode/                 # Sub-modules (persona, types, UI fragments)
 │   ├── model-usage.tsx              # TUI: usage sidebar + /usage command
 │   ├── model-usage.config.json      # Model multipliers + deprecated
-│   └── model-usage/                 # Sub-modules (types, helpers, db, quota, sidebar, command)
-│   ├── notifications.js             # Server: Desktop notifications
+│   ├── model-usage/                 # Sub-modules (types, helpers, db, quota, sidebar, command)
+│   ├── notifications.ts             # Server: Desktop notifications
 │   ├── notifications.config.jsonc   # Notification settings
 │   └── logs/                        # Debug logs (gitignored)
 ├── skills/
