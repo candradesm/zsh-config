@@ -2,6 +2,9 @@
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui"
 import { Database } from "bun:sqlite"
 import { existsSync } from "node:fs"
+import { homedir } from "node:os"
+
+import { onMount } from "solid-js"
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -13,6 +16,14 @@ interface ModelUsage {
   totalOutput: number
 }
 
+interface UsageRow {
+  model_id: string | null
+  provider_id: string | null
+  total_cost: number | null
+  total_input: number | null
+  total_output: number | null
+}
+
 interface UsageData {
   models: ModelUsage[]
   totalInput: number
@@ -20,17 +31,16 @@ interface UsageData {
   totalCost: number
 }
 
+const MAX_MODELS = 10
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function getMonthBounds(): [number, number] {
+function getMonthInfo(): { startMs: number; endMs: number; label: string } {
   const now = new Date()
-  const start = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)
-  const end = Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)
-  return [start, end]
-}
-
-function getMonthLabel(): string {
-  return new Date().toLocaleString("en-US", { month: "long", year: "numeric" })
+  const startMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)
+  const endMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)
+  const label = now.toLocaleString("en-US", { month: "long", year: "numeric" })
+  return { startMs, endMs, label }
 }
 
 function fmt(n: number): string {
@@ -38,12 +48,10 @@ function fmt(n: number): string {
 }
 
 function fmtCost(n: number): string {
-  if (n >= 1) return `$${n.toFixed(2)}`
-  if (n >= 0.01) return `$${n.toFixed(3)}`
-  return `$${n.toFixed(4)}`
+  return `$${n.toFixed(2)}`
 }
 
-function buildBar(percentage: number, width: number = 30): string {
+function buildBar(percentage: number, width: number = 50): string {
   const clamped = Math.max(0, Math.min(100, percentage))
   const filled = Math.max(0, Math.round((clamped / 100) * width))
   return "\u2588".repeat(filled) + "\u2591".repeat(width - filled)
@@ -57,8 +65,7 @@ function barColor(percentage: number, theme: any): string {
 
 // ─── DB Query ────────────────────────────────────────────────────────────────
 
-function queryUsage(dbPath: string): UsageData | { error: string } {
-  const [startMs, endMs] = getMonthBounds()
+function queryUsage(dbPath: string, startMs: number, endMs: number): UsageData | { error: string } {
 
   let db: Database | null = null
   try {
@@ -78,9 +85,9 @@ function queryUsage(dbPath: string): UsageData | { error: string } {
            AND time_created <  ?
          GROUP BY provider_id, model_id
          ORDER BY (total_input + total_output) DESC
-         LIMIT 10`,
+         LIMIT ${MAX_MODELS}`,
       )
-      .all(startMs, endMs) as any[]
+      .all(startMs, endMs) as UsageRow[]
 
     db.close()
     db = null
@@ -90,11 +97,11 @@ function queryUsage(dbPath: string): UsageData | { error: string } {
     let totalCost = 0
 
     const models: ModelUsage[] = (rows ?? [])
-      .filter((r: any) => r.provider_id && r.model_id)
-      .map((r: any) => {
-        const inp = r.total_input ?? 0
-        const out = r.total_output ?? 0
-        const cost = r.total_cost ?? 0
+      .filter((r: UsageRow) => r.provider_id && r.model_id)
+      .map((r: UsageRow) => {
+        const inp = Math.max(0, r.total_input ?? 0)
+        const out = Math.max(0, r.total_output ?? 0)
+        const cost = Math.max(0, r.total_cost ?? 0)
         totalInput += inp
         totalOutput += out
         totalCost += cost
@@ -130,10 +137,10 @@ const tui: TuiPlugin = async (api) => {
         category: "Plugin",
         namespace: "palette",
         slashName: "usage",
-        run() {
+        async run() {
+          const { startMs, endMs, label } = getMonthInfo()
           const theme = api.theme.current
-          const statePath = api.path.get().state
-          const dbPath = `${statePath}/opencode.db`
+          const dbPath = `${homedir()}/.local/share/opencode/opencode.db`
 
           const fg = theme?.foreground ?? "#ffffff"
           const muted = theme?.muted ?? "#888888"
@@ -141,33 +148,44 @@ const tui: TuiPlugin = async (api) => {
 
           // ── DB not found ────────────────────────────────────────────────
           if (!existsSync(dbPath)) {
-            api.ui.dialog.setSize("medium")
-            api.ui.dialog.replace(() => (
-              <box padding={2} flexDirection="column" gap={1}>
-                <text fg={red}>
-                  <b>Usage Data Unavailable</b>
-                </text>
-                <text fg={muted}>
-                  Database not found at the expected location.
-                </text>
-                <text fg={muted}>Please try again later.</text>
-              </box>
-            ))
+            api.ui.dialog.replace(() => {
+              onMount(() => {
+                api.ui.dialog.setSize("medium")
+              })
+              return (
+                <box padding={2} flexDirection="column" gap={1}>
+                  <text fg={red}>
+                    <b>Usage Data Unavailable</b>
+                  </text>
+                  <text fg={muted}>
+                    Database not found at the expected location.
+                  </text>
+                  <text fg={muted}>Please try again later.</text>
+                </box>
+              )
+            })
             return
           }
 
           // ── Loading ──────────────────────────────────────────────────────
-          api.ui.dialog.setSize("large")
-          api.ui.dialog.replace(() => (
-            <box padding={2} flexDirection="column" gap={1}>
-              <text fg={fg}>
-                <b>Loading usage data…</b>
-              </text>
-            </box>
-          ))
+          api.ui.dialog.replace(() => {
+            onMount(() => {
+              api.ui.dialog.setSize("large")
+            })
+            return (
+              <box paddingLeft={2} paddingRight={2} paddingBottom={1} flexDirection="column" gap={1}>
+                <text fg={fg}>
+                  <b>Loading usage data…</b>
+                </text>
+              </box>
+            )
+          })
+
+          // ── Yield to let the TUI paint the loading dialog ───────────────
+          await new Promise(r => setTimeout(r, 0))
 
           // ── Query ────────────────────────────────────────────────────────
-          const result = queryUsage(dbPath)
+          const result = queryUsage(dbPath, startMs, endMs)
 
           // ── Query error ──────────────────────────────────────────────────
           if ("error" in result) {
@@ -182,74 +200,60 @@ const tui: TuiPlugin = async (api) => {
             return
           }
 
+          // ── Render report in dialog ──────────────────────────────────────
           const { models, totalInput, totalOutput, totalCost } = result
           const totalTokens = totalInput + totalOutput
-
-          // ── No data ──────────────────────────────────────────────────────
-          if (models.length === 0 || totalTokens === 0) {
-            api.ui.dialog.replace(() => (
-              <box padding={2} flexDirection="column" gap={1}>
-                <text fg={fg}>
-                  <b>This Month Usage</b>
-                </text>
-                <text fg={muted}>
-                  No usage data for {getMonthLabel()}.
-                </text>
-              </box>
-            ))
-            return
-          }
-
-          // ── Render results ───────────────────────────────────────────────
           const hasCost = totalCost > 0
+          const emptyResult = models.length === 0
 
-          api.ui.dialog.replace(() => (
-            <box padding={1} flexDirection="column" gap={0}>
-              {/* Header */}
-              <text fg={fg}>
-                <b>This Month Usage</b>
-              </text>
-              <text fg={muted}>{getMonthLabel()}</text>
-              <text> </text>
-
-              {/* Totals */}
-              <text fg={fg}>
-                Total: {fmt(totalTokens)} tokens
-                {hasCost ? ` (${fmtCost(totalCost)})` : ""}
-              </text>
-              <text fg={muted}>  ↑ Input:  {fmt(totalInput)} tokens</text>
-              <text fg={muted}>  ↓ Output: {fmt(totalOutput)} tokens</text>
-              <text> </text>
-
-              {/* Per Model */}
-              <text fg={fg}>
-                <b>Per Model</b> (top {models.length})
-              </text>
-              <text> </text>
-
-              {models.map((m, i) => {
-                const modelTokens = m.totalInput + m.totalOutput
-                const pct = totalTokens > 0 ? (modelTokens / totalTokens) * 100 : 0
-                const displayName = `${m.providerId}/${m.modelId}`
-                const modelHasCost = m.totalCost > 0
-
-                return (
-                  <box flexDirection="column" gap={1}>
-                    <text fg={fg}>
-                      {i + 1}. {displayName}
-                    </text>
-                    <text fg={muted}>
-                      {"   "}
-                      {fmt(modelTokens)} tokens ({pct.toFixed(1)}%)
-                      {modelHasCost ? ` — ${fmtCost(m.totalCost)}` : ""}
-                    </text>
-                    <text fg={barColor(pct, theme)}>{buildBar(pct)}</text>
-                    {i < models.length - 1 && <text> </text>}
+          api.ui.dialog.replace(() => {
+            onMount(() => {
+              api.ui.dialog.setSize("large")
+            })
+            return (
+              <box paddingLeft={2} paddingRight={2} flexDirection="column" gap={1}>
+                <box flexDirection="row" justifyContent="space-between">
+                  <box flexDirection="column" gap={0}>
+                    <text fg={fg}><b>This Month Usage</b></text>
+                    <text fg={muted}>{label}</text>
                   </box>
-                )
-              })}
-            </box>
-          ))
+                  <text fg={muted}>esc</text>
+                </box>
+                {emptyResult ? (
+                  <box paddingBottom={1}>
+                    <text> </text>
+                    <text fg={muted}>No usage data for {label}.</text>
+                  </box>
+                ) : (
+                  <box paddingBottom={1}>
+                    <>
+                      <text> </text>
+                      <text fg={fg}>Total: {fmt(totalTokens)} tokens{hasCost ? ` (${fmtCost(totalCost)})` : ""}</text>
+                      <text fg={muted}>  ↑ Input:  {fmt(totalInput)} tokens</text>
+                      <text fg={muted}>  ↓ Output: {fmt(totalOutput)} tokens</text>
+                      <text> </text>
+                      <text fg={fg}><b>Per Model</b> (top {models.length})</text>
+                      <text> </text>
+                      {models.map((m, i) => {
+                        const modelTokens = m.totalInput + m.totalOutput
+                        const pct = totalTokens > 0 ? (modelTokens / totalTokens) * 100 : 0
+                        const displayName = `${m.providerId}/${m.modelId}`
+                        const modelHasCost = m.totalCost > 0
+                        return (
+                          <box key={m.providerId + "/" + m.modelId} flexDirection="column" gap={1}>
+                            <text fg={fg}>{i + 1}. {displayName}</text>
+                            <text fg={muted}>{fmt(modelTokens)} tokens ({pct.toFixed(1)}%){modelHasCost ? ` — ${fmtCost(m.totalCost)}` : ""}</text>
+                            <text fg={barColor(pct, theme)}>{buildBar(pct, 50)}</text>
+                            {i < models.length - 1 && <text> </text>}
+                          </box>
+                        )
+                      })}
+                    </>
+                  </box>
+                )}
+              </box>
+            )
+          })
         },
       },
     ],
