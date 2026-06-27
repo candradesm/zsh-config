@@ -4,22 +4,19 @@ Configuration for [OpenCode](https://opencode.ai/) — agents, plugins, skills, 
 
 ## Plugins
 
-### copilot-usage (TUI)
+### model-usage (TUI)
 
-Sidebar widget showing GitHub Copilot premium request usage.
+Sidebar widget + `/usage` slash command showing token usage and quota across providers.
 
-- Session usage tracking (user prompts × model multiplier)
-- Monthly quota from GitHub API (paid and free plans)
-- Displays percentage **used** with progress bar (matching GitHub's UI)
-- Color coding based on usage level:
-  - Green: ≤75% used
-  - Yellow: 75–90% used
-  - Red: >90% used (or over quota)
-- Auto-refresh every 5 minutes
+**Sidebar:** Cost estimation (price-weighted input/output split from API) plus provider-specific quota:
+- **GitHub Copilot** — premium request counting + monthly quota from GitHub API
+- **opencode-go** — rolling (5h), weekly, and monthly quota scraped from opencode.ai
 
-**Files:** `plugins/copilot-usage.tsx`, `plugins/copilot-usage.config.json`, `plugins/tui.json`
-**Requires:** `GITHUB_TOKEN` env var (optional)
-**Debug:** `OPENCODE_COPILOT_DEBUG=false` to disable logs
+**`/usage` command:** Monthly token breakdown per model (top 10) with progress bars, queried from OpenCode's SQLite database.
+
+**Files:** `plugins/model-usage.tsx`, `plugins/model-usage.config.json`, `plugins/model-usage/`
+**Requires:** `GITHUB_TOKEN` (for Copilot quota), `OPENCODE_GO_WORKSPACE_ID` + `OPENCODE_GO_AUTH_COOKIE` (for Go quota)
+**Debug:** `OPENCODE_COPILOT_DEBUG=true` to enable logs
 
 ### notifications (Server)
 
@@ -74,8 +71,9 @@ Desktop notifications for session events.
 ├── opencode.json                    # Server config (providers, etc.)
 ├── tui.json                         # TUI plugin registration
 ├── plugins/
-│   ├── copilot-usage.tsx            # TUI: Copilot usage sidebar
-│   ├── copilot-usage.config.json    # Model multipliers
+│   ├── model-usage.tsx              # TUI: usage sidebar + /usage command
+│   ├── model-usage.config.json      # Model multipliers + deprecated
+│   └── model-usage/                 # Sub-modules (types, helpers, db, quota, sidebar, command)
 │   ├── notifications.js             # Server: Desktop notifications
 │   ├── notifications.config.jsonc   # Notification settings
 │   └── logs/                        # Debug logs (gitignored)
