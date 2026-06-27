@@ -35,6 +35,7 @@ export function registerJungleCommand(
         category: "Plugin",
         namespace: "palette",
         slashName: "jungle",
+        keybind: "ctrl+j",
         async run() {
           const newState = !enabled()
           await writeJungleMode(newState)
