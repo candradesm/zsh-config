@@ -135,5 +135,12 @@ export function registerUsageCommand(api: TuiPluginApi) {
         },
       },
     ],
+    bindings: [
+      {
+        key: "ctrl+shift+u",
+        cmd: "usage.show",
+        desc: "Show Monthly Usage",
+      },
+    ],
   })
 }

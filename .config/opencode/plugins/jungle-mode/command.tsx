@@ -35,12 +35,18 @@ export function registerJungleCommand(
         category: "Plugin",
         namespace: "palette",
         slashName: "jungle",
-        keybind: "ctrl+shift+m",
         async run() {
           const newState = !enabled()
           await writeJungleMode(newState)
           setEnabled(newState)
         },
+      },
+    ],
+    bindings: [
+      {
+        key: "ctrl+shift+m",
+        cmd: "jungle.toggle",
+        desc: "Toggle Jungle Mode",
       },
     ],
   })
