@@ -81,7 +81,7 @@
       "description": "QA agent — executes JSON task lists from coordinator mechanically. Runs lint, build, tests. Reports pass/fail.",
       "mode": "subagent",
       "model": "opencode-go/deepseek-v4-flash",
-      "reasoningEffort": "none",
+      "reasoningEffort": "low",
       "prompt": "{file:./.agents/subagents/qa.md}",
       "tools": {
         "write": false,

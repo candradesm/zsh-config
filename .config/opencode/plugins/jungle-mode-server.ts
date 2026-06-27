@@ -17,33 +17,58 @@ async function isJungleEnabled(): Promise<boolean> {
   }
 }
 
-function detectPersonaFromSystem(system: string[]): string | null {
-  const text = system.join("\n")
-  if (text.includes("Lead Coordinator Agent")) return getPersonaForAgent("coordinator")
-  if (text.includes("Implementation Agent")) return getPersonaForAgent("developer")
-  if (text.includes("Test Agent")) return getPersonaForAgent("testing")
-  if (text.includes("Quality Agent")) return getPersonaForAgent("qa")
-  if (text.includes("Review Agent")) return getPersonaForAgent("reviewer")
-  return null
+function detectCoordinatorInSystem(system: string[]): boolean {
+  return system.join("\n").includes("Lead Coordinator Agent")
 }
 
 export const JungleModePlugin = async () => {
   return {
+    // Coordinator: hidden system prompt injection
     "experimental.chat.system.transform": async (
-      input: { sessionID?: string; model: any },
+      _input: { sessionID?: string; model: any },
       output: { system: string[] },
     ) => {
       const enabled = await isJungleEnabled()
       if (!enabled) return
 
-      // Only inject once per session
-      if (input.sessionID && injectedSessions.has(input.sessionID)) return
+      if (!detectCoordinatorInSystem(output.system)) return
+      if (_input.sessionID && injectedSessions.has(_input.sessionID)) return
 
-      const persona = detectPersonaFromSystem(output.system)
+      const persona = getPersonaForAgent("coordinator")
       if (!persona) return
 
-      if (input.sessionID) injectedSessions.add(input.sessionID)
+      if (_input.sessionID) injectedSessions.add(_input.sessionID)
       output.system.push(persona)
+    },
+
+    // Subagents: edit existing text part
+    "chat.message": async (
+      input: {
+        sessionID: string
+        agent?: string
+        model?: { providerID: string; modelID: string }
+        messageID?: string
+        variant?: string
+      },
+      output: { message: any; parts: any[] },
+    ) => {
+      const enabled = await isJungleEnabled()
+      if (!enabled) return
+
+      if (injectedSessions.has(input.sessionID)) return
+
+      const agent = input.agent?.toLowerCase()
+      if (!agent || agent === "coordinator") return
+
+      const persona = getPersonaForAgent(agent)
+      if (!persona) return
+
+      injectedSessions.add(input.sessionID)
+
+      const part = output.parts.find((p: any) => p.type === "text" && !p.synthetic)
+      if (part) {
+        part.text = persona + part.text
+      }
     },
   }
 }
