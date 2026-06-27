@@ -1,7 +1,7 @@
 # General utility commands
 git-stats() {
-  git log --author="$(git config user.name)" --pretty=tformat: --numstat |
-    awk '{ add += $1; subs += $2; total += $1 + $2; diff += $1 - $2 } END { printf "added lines: %s, removed lines: %s, total lines: %s, diff: %s\n", add, subs, total, diff }' -
+    git log --author="$(git config user.name)" --pretty=tformat: --numstat | \
+        awk '{ add += $1; subs += $2; total += $1 + $2; diff += $1 - $2 } END { printf "added lines: %s, removed lines: %s, total lines: %s, diff: %s\n", add, subs, total, diff }' -
 }
 
 alias java17="/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home/bin/java"
