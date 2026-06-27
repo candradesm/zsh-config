@@ -131,10 +131,10 @@ Uncomment sections in that file to enable them.
 
 This repo includes a pre-configured [Opencode](https://opencode.ai/) setup with:
 
-- **Custom Agents:** Coordinator, Developer, QA, Reviewer, Testing (available in jungle-theme and professional variants)
+- **Custom Agents:** Coordinator, Developer, QA, Reviewer, Testing (jungle personas toggled via `/jungle` command)
 - **Skills:** Automated code review, project scanning, bootstrapping, plugin development, git workflow, and issue creation
-- **TUI Plugins:** Copilot usage sidebar (quota + session tracking)
-- **Server Plugins:** Desktop notifications for session events
+- **TUI Plugins:** Copilot usage sidebar (quota + session tracking), jungle-mode indicator
+- **Server Plugins:** Desktop notifications, jungle-mode persona injection
 - **Configuration:** Ready-to-use settings for AI-assisted development
 - **RTK (Rust Token Killer):** CLI proxy that reduces LLM token consumption by 60-90% on common dev commands. Install via `brew install rtk` and run `rtk init -g --opencode`
 
