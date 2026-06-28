@@ -1,4 +1,4 @@
 {
   "$schema": "https://opencode.ai/tui.json",
-  "plugin": ["./plugins/model-usage.tsx"]
+  "plugin": ["./plugins/model-usage.tsx", "./plugins/jungle-mode.tsx"]
 }

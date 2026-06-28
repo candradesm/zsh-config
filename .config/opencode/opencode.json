@@ -2,6 +2,56 @@
   "$schema": "https://opencode.ai/config.json",
   "instructions": [".github/*.md"],
   "share": "disabled",
+  "references": {
+    "ECIBotKt": {
+      "repository": "Wikijito7/ECIBotKt",
+      "description": "Use when working on ECIBotKt Discord bot features, commands, or Kotlin Discord implementations"
+    },
+    "ecibot-web": {
+      "repository": "Wikijito7/ecibot-web",
+      "description": "Use when working on ECIBot web frontend, dashboards, or network website features"
+    },
+    "ecibot-server": {
+      "repository": "Wikijito7/ecibot-server",
+      "description": "Use when working on ECIBot backend services, API endpoints, or server infrastructure"
+    },
+    "base-ktor-server": {
+      "repository": "Wikijito7/base-ktor-server",
+      "description": "Use when working on wokis network microservices in Kotlin/Ktor"
+    },
+    "kord": {
+      "repository": "kordlib/kord",
+      "description": "Use when implementing Discord wrapper features, gateway events, or Discord API integrations"
+    },
+    "lavaplayer": {
+      "repository": "lavalink-devs/lavaplayer",
+      "description": "Use when working on audio playback, music streaming, or voice channel audio features"
+    },
+    "LavaSrc": {
+      "repository": "topi314/LavaSrc",
+      "description": "Use when adding custom audio sources, stream providers, or extending Lavaplayer audio support"
+    },
+    "LavaLyrics": {
+      "repository": "topi314/LavaLyrics",
+      "description": "Use when working on lavaplayer, implementing lyrics display, or track metadata features"
+    },
+    "mockk": {
+      "repository": "mockk/mockk",
+      "description": "Use when writing or debugging Kotlin unit tests, mocking dependencies, or test utilities"
+    },
+    "koin": {
+      "repository": "insertkoinio/koin",
+      "description": "Use when setting up dependency injection, modules, or inversion of control in Kotlin"
+    },
+    "opencode": {
+      "repository": "anomalyco/opencode",
+      "description": "Use when debugging OpenCode behavior, contributing to OpenCode, or understanding CLI internals"
+    },
+    "ktor": {
+      "repository": "ktorio/ktor",
+      "description": "Use when building HTTP clients/servers, setting up routing, or configuring Ktor application features"
+    }
+  },
   "permission": {
     "bash": {
       "*sh -c *": "ask",
@@ -40,6 +90,8 @@
     "coordinator": {
       "description": "Warrior Monke 🦧 — THE JUNGLE coordinator. Analyzes tasks, creates plans, and delegates to subagents.",
       "mode": "primary",
+      "model": "opencode-go/deepseek-v4-pro",
+      "reasoningEffort": "high",
       "prompt": "{file:./.agents/coordinator.md}",
       "tools": {
         "write": false,
@@ -47,11 +99,15 @@
         "bash": false
       }
     },
+    "explore": {
+      "model": "opencode-go/deepseek-v4-flash",
+      "reasoningEffort": "low"
+    },
     "developer": {
       "description": "Implementation agent that writes productive code and fixes bugs for the jungle",
       "mode": "subagent",
-      "model": "opencode-go/kimi-k2.5",
-      "temperature": 0.2,
+      "model": "opencode-go/deepseek-v4-flash",
+      "reasoningEffort": "low",
       "prompt": "{file:./.agents/subagents/developer.md}",
       "tools": {
         "write": true,
@@ -59,11 +115,23 @@
         "bash": true
       }
     },
-    "qa": {
-      "description": "QA agent that runs project checks before CI/CD and ensures the jungle is in good shape",
+    "testing": {
+      "description": "Testing agent that creates tests for the jungle",
       "mode": "subagent",
-      "model": "opencode-go/minimax-m2.5",
-      "temperature": 0,
+      "model": "opencode-go/deepseek-v4-flash",
+      "reasoningEffort": "low",
+      "prompt": "{file:./.agents/subagents/testing.md}",
+      "tools": {
+        "write": true,
+        "edit": true,
+        "bash": true
+      }
+    },
+    "qa": {
+      "description": "QA agent — executes JSON task lists from coordinator mechanically. Runs lint, build, tests. Reports pass/fail.",
+      "mode": "subagent",
+      "model": "opencode-go/deepseek-v4-flash",
+      "reasoningEffort": "low",
       "prompt": "{file:./.agents/subagents/qa.md}",
       "tools": {
         "write": false,
@@ -74,24 +142,12 @@
     "reviewer": {
       "description": "Reviewer agent that performs code reviews and provides feedback to the jungle",
       "mode": "subagent",
-      "model": "opencode-go/glm-5",
-      "temperature": 0,
+      "model": "opencode-go/qwen3.7-plus",
+      "reasoningEffort": "medium",
       "prompt": "{file:./.agents/subagents/reviewer.md}",
       "tools": {
         "write": false,
         "edit": false,
-        "bash": true
-      }
-    },
-    "testing": {
-      "description": "Testing agent that creates tests for the jungle",
-      "mode": "subagent",
-      "model": "opencode-go/kimi-k2.5",
-      "temperature": 0,
-      "prompt": "{file:./.agents/subagents/testing.md}",
-      "tools": {
-        "write": true,
-        "edit": true,
         "bash": true
       }
     }
