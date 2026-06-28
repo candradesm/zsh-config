@@ -18,12 +18,35 @@ export function log(...args: unknown[]) {
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
 
-export function getMonthInfo(): { startMs: number; endMs: number; label: string } {
+export function getMonthInfo(year?: number, month?: number): { startMs: number; endMs: number; label: string } {
   const now = new Date()
-  const startMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)
-  const endMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)
-  const label = now.toLocaleString("en-US", { month: "long", year: "numeric" })
+  const y = year ?? now.getUTCFullYear()
+  const m = month ?? now.getUTCMonth()
+  const startMs = Date.UTC(y, m, 1)
+  const endMs = Date.UTC(y, m + 1, 1)
+  const label = new Date(Date.UTC(y, m, 1)).toLocaleString("en-US", { month: "long", year: "numeric", timeZone: "UTC" })
   return { startMs, endMs, label }
+}
+
+export function isCurrentMonth(startMs: number): boolean {
+  const now = new Date()
+  const currentStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)
+  return startMs === currentStart
+}
+
+export const RELOAD_MESSAGES = [
+  "🐵 Counting bananzas...",
+  "🌴 Climbing the token tree...",
+  "🦍 Consulting Senior Engineer...",
+  "🍌 Harvesting usage data...",
+  "🐒 Swinging through the database...",
+  "🦆🔍 Quality checking your tokens...",
+  "🐐 Roasting your usage stats...",
+  "🌿 Foraging for premium requests...",
+]
+
+export function randomReloadMessage(): string {
+  return RELOAD_MESSAGES[Math.floor(Math.random() * RELOAD_MESSAGES.length)]
 }
 
 export function fmt(n: number): string {
