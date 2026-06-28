@@ -7,6 +7,12 @@ import { getMonthInfo, fmt, fmtCost, buildBar } from "./helpers"
 import type { UsageData } from "./types"
 import { queryUsage } from "./db"
 
+const CACHE_TTL_MS = 60_000 // 1 minute
+
+let cachedResult: UsageData | { error: string } | null = null
+let cachedMonth: number = -1
+let cachedAt: number = 0
+
 export function registerUsageCommand(api: TuiPluginApi) {
   api.keymap.registerLayer({
     commands: [
@@ -110,16 +116,34 @@ export function registerUsageCommand(api: TuiPluginApi) {
             )
           })
 
-          // Query in background after dialog paints
-          setTimeout(() => {
-            const result = queryUsage(dbPath, startMs, endMs)
-            if ("error" in result) {
-              setErrorMsg(result.error)
+          // Use cache if fresh and same month, otherwise query in background
+          const cacheIsFresh = cachedResult && cachedMonth === startMs && (Date.now() - cachedAt) < CACHE_TTL_MS
+          if (cacheIsFresh) {
+            const cached = cachedResult!
+            if ("error" in cached) {
+              setErrorMsg(cached.error)
               setViewState("error")
             } else {
-              setViewState(result)
+              setViewState(cached)
             }
-          }, 10)
+          } else {
+            // Show cached data as placeholder if available (instant), then refresh
+            if (cachedResult && cachedMonth === startMs && !("error" in cachedResult)) {
+              setViewState(cachedResult)
+            }
+            setTimeout(() => {
+              const result = queryUsage(dbPath, startMs, endMs)
+              cachedResult = result
+              cachedMonth = startMs
+              cachedAt = Date.now()
+              if ("error" in result) {
+                setErrorMsg(result.error)
+                setViewState("error")
+              } else {
+                setViewState(result)
+              }
+            }, 10)
+          }
         },
       },
     ],
