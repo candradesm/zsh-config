@@ -3,6 +3,7 @@ import { getPersonaForAgent } from "./jungle-mode/persona"
 
 const CONFIG_PATH = `${homedir()}/.config/opencode/jungle-mode.json`
 const injectedSessions = new Set<string>()
+const sessionAgent = new Map<string, string>()
 
 async function isJungleEnabled(): Promise<boolean> {
   try {
@@ -23,7 +24,6 @@ function detectCoordinatorInSystem(system: string[]): boolean {
 
 export const JungleModePlugin = async () => {
   return {
-    // Coordinator: hidden system prompt injection
     "experimental.chat.system.transform": async (
       _input: { sessionID?: string; model: any },
       output: { system: string[] },
@@ -31,6 +31,22 @@ export const JungleModePlugin = async () => {
       const enabled = await isJungleEnabled()
       if (!enabled) return
 
+      // Primary path: Map bridge (plan/build/coordinator)
+      const agent = _input.sessionID ? sessionAgent.get(_input.sessionID) : undefined
+      if (agent) {
+        // Skip title generator — it fires first and would steal the persona from the real agent
+        if (output.system.join("\n").includes("You are a title generator")) return
+        sessionAgent.delete(_input.sessionID)
+        if (injectedSessions.has(_input.sessionID + ":" + agent)) return
+        const persona = getPersonaForAgent(agent)
+        if (persona) {
+          injectedSessions.add(_input.sessionID + ":" + agent)
+          output.system[0] = "Instructions from: jungle-mode/primary-agent-persona\n" + persona + "\n\n" + output.system[0]
+        }
+        return
+      }
+
+      // Fallback: original string matching for coordinator
       if (!detectCoordinatorInSystem(output.system)) return
       if (_input.sessionID && injectedSessions.has(_input.sessionID)) return
 
@@ -38,10 +54,9 @@ export const JungleModePlugin = async () => {
       if (!persona) return
 
       if (_input.sessionID) injectedSessions.add(_input.sessionID)
-      output.system.push(persona)
+      output.system[0] = "Instructions from: jungle-mode/primary-agent-persona\n" + persona + "\n\n" + output.system[0]
     },
 
-    // Subagents: edit existing text part
     "chat.message": async (
       input: {
         sessionID: string
@@ -55,10 +70,18 @@ export const JungleModePlugin = async () => {
       const enabled = await isJungleEnabled()
       if (!enabled) return
 
-      if (injectedSessions.has(input.sessionID)) return
+      // Detect agent from resolved message (always populated)
+      const agent = output.message?.agent?.toLowerCase()
+      if (!agent) return
 
-      const agent = input.agent?.toLowerCase()
-      if (!agent || agent === "coordinator") return
+      // Primary agents: store for system.transform, skip message injection
+      if (agent === "coordinator" || agent === "plan" || agent === "build") {
+        sessionAgent.set(input.sessionID, agent)
+        return
+      }
+
+      // Subagents: prepend persona to message text
+      if (injectedSessions.has(input.sessionID)) return
 
       const persona = getPersonaForAgent(agent)
       if (!persona) return
