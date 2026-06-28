@@ -42,12 +42,6 @@ export function buildBar(percentage: number, width: number = 50): string {
   return "\u2588".repeat(filled) + "\u2591".repeat(width - filled)
 }
 
-export function barColor(percentage: number, theme: any): string {
-  if (percentage > 50) return theme?.green ?? "#22c55e"
-  if (percentage > 25) return theme?.yellow ?? "#eab308"
-  return theme?.muted ?? "#888888"
-}
-
 export function buildProgressBar(percentage: number, width: number = 20): string {
   const filled = Math.min(Math.round((percentage / 100) * width), width)
   const empty = width - filled

@@ -376,7 +376,8 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
       return
     }
     log("fetchQuota: starting, token length:", githubToken.length)
-    setQuotaLoading(true)
+    // Only show loading on initial fetch — keep old data visible during refresh
+    if (!quotaInfo()) setQuotaLoading(true)
     const info = await fetchQuotaInfo(githubToken)
     log("fetchQuota: got info:", JSON.stringify(info))
     setQuotaInfo(info)
@@ -655,7 +656,7 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
                     {(quotaInfo()!.entitlement - quotaInfo()!.remaining).toLocaleString()} / {quotaInfo()!.entitlement.toLocaleString()} {getQuotaLabel(quotaInfo()!)}
                   </text>
                 </box>
-              ) : quotaLoading() ? (
+              ) : !quotaInfo() && quotaLoading() ? (
                 <text fg="#888888">Loading...</text>
               ) : (
                 <text fg="#888888">Unable to fetch quota</text>
@@ -664,7 +665,7 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
           ) : isOpenCodeGoActive() ? (
             <>
               <text fg={props.api.theme.current?.muted ?? "#888888"}>Quota</text>
-              {goQuotaLoading() ? (
+              {!goQuota() && goQuotaLoading() ? (
                 <text fg="#888888">Loading...</text>
               ) : goQuota() ? (
                 /* If all three bars are null or at 0%, the web page couldn't authenticate */
