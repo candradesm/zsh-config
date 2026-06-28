@@ -1,62 +1,30 @@
 /** @jsxImportSource @opentui/solid */
-import type { TuiPlugin, TuiPluginModule, TuiPluginApi } from "@opencode-ai/plugin/tui"
+import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { EventMessageUpdated } from "@opencode-ai/sdk/v2"
 import { createSignal, createEffect, createMemo, onCleanup } from "solid-js"
-import { mkdirSync, appendFileSync } from "node:fs"
+import type { CopilotConfig, CopilotQuotaInfo, GoQuotaInfo, MessagePart } from "./types"
+import {
+  log as logFn,
+  DEBUG,
+  isSupportedModel, calculateMessageMultiplier,
+  roundUsage, buildProgressBar, getUsageColor, getQuotaLabel,
+  formatDuration, isModelDeprecated,
+  splitCost,
+  logPath,
+} from "./helpers"
+import { appendFileSync } from "node:fs"
+
+const log = logFn
+import { fetchQuotaInfo, fetchGoQuota } from "./quota"
 
 const QUOTA_REFRESH_MS = 5 * 60 * 1000
 const MAX_POLL_ATTEMPTS = 30
 const PLUGIN_VERSION = "v35"
 
-interface TokenPrice {
-  input: number
-  cacheRead?: number
-  output: number
-}
-
-interface CopilotConfig {
-  modelMultipliers: Record<string, number>
-  tokenPricing: Record<string, TokenPrice>
-  deprecated: string[]
-}
-
-interface CopilotQuotaInfo {
-  percentRemaining: number
-  entitlement: number
-  remaining: number
-  overageCount: number
-  overagePermitted: boolean
-  unlimited: boolean
-  planType: "free" | "paid"
-  quotaType: "premium" | "ai_credits"
-  tokenBasedBilling: boolean
-}
-
-interface MessagePart {
-  type: string
-  synthetic?: boolean
-}
-
-const DEBUG = process.env.OPENCODE_COPILOT_DEBUG === "true"
-const logsDir = new URL("./logs", import.meta.url).pathname
-const logPath = new URL(`./logs/log_copilot_plugin_${Date.now()}.log`, import.meta.url).pathname
-if (DEBUG) mkdirSync(logsDir, { recursive: true })
-
-const log = (...args: unknown[]) => {
-  if (!DEBUG) return
-  try {
-    const line = `[${new Date().toISOString()}] ${args.map(String).join(" ")}\n`
-    appendFileSync(logPath, line)
-  } catch {
-    // ignore
-  }
-}
-
-log(`=== copilot-usage ${PLUGIN_VERSION} loaded ===`)
-log("logPath:", logPath)
+log(`=== usage-sidebar ${PLUGIN_VERSION} loaded ===`)
 
 async function loadConfig(): Promise<CopilotConfig> {
-  const configPath = new URL("./copilot-usage.config.json", import.meta.url).pathname
+  const configPath = new URL("../model-usage.config.json", import.meta.url).pathname
   log("loadConfig: trying path:", configPath)
   try {
     const configFile = Bun.file(configPath)
@@ -67,7 +35,6 @@ async function loadConfig(): Promise<CopilotConfig> {
       const parsed = JSON.parse(raw) as Partial<CopilotConfig>
       const cfg: CopilotConfig = {
         modelMultipliers: parsed.modelMultipliers ?? {},
-        tokenPricing: parsed.tokenPricing ?? {},
         deprecated: parsed.deprecated ?? [],
       }
       log("loadConfig: loaded config:", JSON.stringify(cfg))
@@ -80,98 +47,8 @@ async function loadConfig(): Promise<CopilotConfig> {
   log("loadConfig: using defaults")
   return {
     modelMultipliers: {},
-    tokenPricing: {},
     deprecated: [],
   }
-}
-
-function getModelId(modelName: string): string | null {
-  if (!modelName) return null
-  const parts = modelName.split("/")
-  if (parts.length < 2) return null
-  const provider = parts[0]
-  if (!provider.includes("copilot")) return null
-  return parts.slice(1).join("/")
-}
-
-function getMultiplier(modelName: string, config: CopilotConfig): number {
-  const modelId = getModelId(modelName)
-  if (!modelId) return 1.0
-  if (config.modelMultipliers[modelId] !== undefined) {
-    return config.modelMultipliers[modelId]
-  }
-  const normalized = modelId.toLowerCase()
-  for (const [key, value] of Object.entries(config.modelMultipliers)) {
-    if (key.toLowerCase() === normalized) return value
-  }
-  return 1.0
-}
-
-function getTokenPrice(modelId: string, config: CopilotConfig): TokenPrice | null {
-  if (!modelId) return null
-  if (config.tokenPricing[modelId] !== undefined) return config.tokenPricing[modelId]
-  const normalized = modelId.toLowerCase()
-  for (const [key, value] of Object.entries(config.tokenPricing)) {
-    if (key.toLowerCase() === normalized) return value
-  }
-  return null
-}
-
-function calcCost(tokens: number, pricePerMillion: number): number {
-  return (tokens / 1_000_000) * pricePerMillion
-}
-
-function isModelDeprecated(modelId: string, config: CopilotConfig): boolean {
-  if (!modelId) return false
-  const normalized = modelId.toLowerCase()
-  return config.deprecated.some((d) => d.toLowerCase() === normalized)
-}
-
-function isCopilotModel(modelName: string): boolean {
-  if (!modelName) return false
-  return modelName.toLowerCase().includes("copilot")
-}
-
-function isSyntheticMessage(parts: MessagePart[]): boolean {
-  // Messages with a "compaction" type part are the real compaction request — always count them.
-  if (parts.some((p) => p.type === "compaction")) return false
-  // The synthetic *continuation* message (auto-created after compaction to resume the chat)
-  // has ONLY {type:"text", synthetic:true} parts and nothing else.
-  // Real user messages may also contain synthetic text parts (e.g. the first message in a
-  // session after context refill), but they always have at least one non-synthetic part too
-  // (e.g. a plain "text" part, a "file" part, etc.).
-  const syntheticTextParts = parts.filter((p) => p.type === "text" && p.synthetic === true)
-  if (syntheticTextParts.length === 0) return false
-  const nonSyntheticParts = parts.filter((p) => !(p.type === "text" && p.synthetic === true))
-  return nonSyntheticParts.length === 0
-}
-
-function calculateMessageMultiplier(
-  msgId: string,
-  parts: MessagePart[],
-  model: string | null,
-  isFreePlan: boolean,
-  config: CopilotConfig,
-  messageMultipliers: Map<string, number>
-): number {
-  if (isSyntheticMessage(parts)) {
-    // Don't store in map — storing 0 would permanently blacklist the message ID,
-    // preventing any future retry if parts change (e.g. message.updated fires again).
-    log("calculateMessageMultiplier: skipping synthetic message", msgId)
-    return 0
-  }
-
-  if (!model || getModelId(model) === null) {
-    // Don't store in map — allows retry when the model becomes available on the next event fire.
-    log("calculateMessageMultiplier: no copilot model for", msgId, "model:", model)
-    return 0
-  }
-
-  const multiplier = isFreePlan ? 1.0 : getMultiplier(model, config)
-  log("calculateMessageMultiplier:", msgId, "model:", model, "multiplier:", multiplier)
-  // Only store positive results — the deduplication guard in message.updated checks this map.
-  messageMultipliers.set(msgId, multiplier)
-  return multiplier
 }
 
 function getActiveModel(api: TuiPluginApi, sessionID: string): string | null {
@@ -197,7 +74,7 @@ function getActiveModel(api: TuiPluginApi, sessionID: string): string | null {
     }
 
     // 1. Check global config model (format: "provider/model")
-    if (configModel && isCopilotModel(configModel)) {
+    if (configModel && isSupportedModel(configModel)) {
       log("getActiveModel: found via config.model:", configModel)
       return configModel
     }
@@ -207,7 +84,7 @@ function getActiveModel(api: TuiPluginApi, sessionID: string): string | null {
       const messages = api.state.session.messages(sessionID)
       for (let i = messages.length - 1; i >= 0; i--) {
         const msg = messages[i]
-        if (msg.role === "assistant" && msg.providerID?.includes("copilot") && msg.modelID) {
+        if (msg.role === "assistant" && (msg.providerID?.includes("copilot") || msg.providerID === "opencode-go") && msg.modelID) {
           const result = `${msg.providerID}/${msg.modelID}`
           log("getActiveModel: found via last assistant message:", result)
           return result
@@ -222,117 +99,12 @@ function getActiveModel(api: TuiPluginApi, sessionID: string): string | null {
   return null
 }
 
-async function fetchQuotaInfo(token: string): Promise<CopilotQuotaInfo | null> {
-  try {
-    log("fetchQuotaInfo: fetching quota from github API")
-    const response = await fetch("https://api.github.com/copilot_internal/user", {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/json",
-        "X-GitHub-Api-Version": "2026-06-01",
-        "User-Agent": "opencode-copilot-usage-plugin",
-      },
-    })
-
-    log("fetchQuotaInfo: response status:", response.status)
-    if (!response.ok) {
-      log("fetchQuotaInfo: response not ok, body:", await response.text().catch(() => "failed to read"))
-      return null
-    }
-
-    const data = await response.json()
-    log("fetchQuotaInfo: copilot_plan:", data?.copilot_plan)
-
-    // Paid plan: try premium_models first, fall back to premium_interactions.
-    // AI Credits detection: check snapshot.token_based_billing or root token_based_billing flag
-    // (GitHub migrated from count-based "premium requests" to token-based "AI Credits").
-    const snapshot = data?.quota_snapshots?.premium_models ?? data?.quota_snapshots?.premium_interactions
-    if (snapshot) {
-      return {
-        percentRemaining: snapshot.percent_remaining ?? 100,
-        entitlement: snapshot.entitlement ?? 0,
-        remaining: snapshot.remaining ?? 0,
-        overageCount: snapshot.overage_count ?? 0,
-        overagePermitted: snapshot.overage_permitted ?? false,
-        unlimited: snapshot.unlimited ?? false,
-        planType: "paid",
-        quotaType: (data?.quota_snapshots?.premium_models || snapshot.token_based_billing || data?.token_based_billing) ? "ai_credits" : "premium",
-        tokenBasedBilling: !!(snapshot.token_based_billing || data?.token_based_billing),
-      }
-    }
-
-    // Free plan: limited_user_quotas + monthly_quotas
-    const chatRemaining = data?.limited_user_quotas?.chat
-    const chatMonthly = data?.monthly_quotas?.chat
-    if (chatRemaining != null && chatMonthly != null && chatMonthly > 0) {
-      const percentRemaining = Math.round((chatRemaining / chatMonthly) * 1000) / 10
-      log("fetchQuotaInfo: free plan, chat remaining:", chatRemaining, "/", chatMonthly, "=", percentRemaining.toFixed(1) + "%")
-      return {
-        percentRemaining,
-        entitlement: chatMonthly,
-        remaining: chatRemaining,
-        overageCount: 0,
-        overagePermitted: false,
-        unlimited: false,
-        planType: "free",
-        quotaType: "premium",
-        tokenBasedBilling: false,
-      }
-    }
-
-    log("fetchQuotaInfo: no quota data found")
-    return null
-  } catch (err) {
-    log("fetchQuotaInfo: error:", String(err))
-    return null
-  }
-}
-
-function buildProgressBar(percentage: number, width: number = 20): string {
-  const filled = Math.min(Math.round((percentage / 100) * width), width)
-  const empty = width - filled
-  return "\u2588".repeat(filled) + "\u2591".repeat(empty)
-}
-
-function roundUsage(value: number): number {
-  let rounded = Math.round(value * 100) / 100
-  // Handle imprecise multiplier artifacts (0.33 ≈ 1/3):
-  // 2×0.33=0.65→0.67, 4×0.33=1.32→1.33, etc.
-  let cents = Math.round((rounded % 1) * 100)
-  if (cents > 0 && cents < 100 && cents % 33 === 32) {
-    rounded = Math.round((rounded + 0.01) * 100) / 100
-    cents = Math.round((rounded % 1) * 100)
-  }
-  // Handle .99 → round up (3×0.33=0.99→1.00)
-  if (cents === 99) {
-    return Math.ceil(rounded)
-  }
-  return rounded
-}
-
-function getUsageColor(percentage: number): string {
-  if (percentage > 100) return "#ef4444"
-  if (percentage > 90) return "#ef4444"
-  if (percentage > 75) return "#eab308"
-  return "#22c55e"
-}
-
-function formatCostLine(arrow: string, tokens: number, cost: number): string {
-  return `${arrow} ${tokens.toLocaleString()} tokens`.padEnd(26) + `$${cost.toFixed(2)}`
-}
-
-function getQuotaLabel(quota: CopilotQuotaInfo): string {
-  if (quota.planType === "free") return "chat requests"
-  if (quota.quotaType === "ai_credits") return "AI Credits"
-  return "premium requests"
-}
-
-function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
-  log("CopilotUsageSidebar: rendering! session_id:", props.session_id)
+function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
+  log("UsageSidebar: rendering! session_id:", props.session_id)
   const githubToken = process.env.GITHUB_TOKEN ?? ""
   const hasToken = !!githubToken
 
-  const [config, setConfig] = createSignal<CopilotConfig>({ modelMultipliers: {}, tokenPricing: {}, deprecated: [] })
+  const [config, setConfig] = createSignal<CopilotConfig>({ modelMultipliers: {}, deprecated: [] })
   const [sessionUsage, setSessionUsage] = createSignal<number>(0)
   const [quotaInfo, setQuotaInfo] = createSignal<CopilotQuotaInfo | null>(null)
   const [quotaLoading, setQuotaLoading] = createSignal<boolean>(false)
@@ -344,9 +116,12 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
   const [totalOutputCost, setTotalOutputCost] = createSignal<number>(0)
   const [configLoaded, setConfigLoaded] = createSignal<boolean>(false)
 
+  const [goQuota, setGoQuota] = createSignal<GoQuotaInfo | null>(null)
+  const [goQuotaLoading, setGoQuotaLoading] = createSignal(false)
+
   const messageMultipliers = new Map<string, number>()
   // Maps messageID → last seen token snapshot for delta calculation (cost billing)
-  const processedAssistantMessages = new Map<string, { input: number; cacheRead: number; output: number }>()
+  const processedAssistantMessages = new Map<string, { input: number; cacheRead: number; output: number; cost: number }>()
   // Maps sessionID → peak context window (input + cacheRead) ever seen in that session (for ↑ display)
   const peakPerSession = new Map<string, number>()
   const trackedSessions = new Set<string>()
@@ -493,7 +268,7 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
   // maximum full-call token count (input + cacheRead + output) per session and sum those peaks
   // across sessions. Including output in the peak makes the ↑ figure match the OpenCode context
   // bar (which shows total conversation size including the last response).
-  // Cost calculation is unchanged — it still accumulates all billable deltas correctly.
+  // Cost is accumulated via info.cost deltas from the API.
   function updatePeakContext(sessionId: string, inputTok: number, cacheReadTok: number, outputTok: number) {
     const contextSize = inputTok + cacheReadTok + outputTok
     const prev = peakPerSession.get(sessionId) ?? 0
@@ -526,21 +301,25 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
         const outputTok: number = info?.tokens?.output ?? 0
         if (inputTok === 0 && cacheReadTok === 0 && outputTok === 0) continue
 
-        const prevSnapshot = processedAssistantMessages.get(msgId) ?? { input: 0, cacheRead: 0, output: 0 }
+        const prevSnapshot = processedAssistantMessages.get(msgId) ?? { input: 0, cacheRead: 0, output: 0, cost: 0 }
         const deltaInput = Math.max(0, inputTok - prevSnapshot.input)
         const deltaCacheRead = Math.max(0, cacheReadTok - prevSnapshot.cacheRead)
         const deltaOutput = Math.max(0, outputTok - prevSnapshot.output)
-        if (deltaInput === 0 && deltaCacheRead === 0 && deltaOutput === 0) continue
+        const deltaCost = Math.max(0, (info?.cost ?? 0) - prevSnapshot.cost)
+        if (deltaInput === 0 && deltaCacheRead === 0 && deltaOutput === 0 && deltaCost === 0) continue
 
-        processedAssistantMessages.set(msgId, { input: inputTok, cacheRead: cacheReadTok, output: outputTok })
-        const modelId: string = info?.modelID ?? ""
-        const price = getTokenPrice(modelId, cfg)
+        processedAssistantMessages.set(msgId, { input: inputTok, cacheRead: cacheReadTok, output: outputTok, cost: info?.cost ?? 0 })
 
         updatePeakContext(sessionID, inputTok, cacheReadTok, outputTok)
         setTotalOutputTokens((prev) => prev + deltaOutput)
-        if (price) {
-          setTotalInputCost((prev) => prev + calcCost(deltaInput, price.input) + calcCost(deltaCacheRead, price.cacheRead ?? 0))
-          setTotalOutputCost((prev) => prev + calcCost(deltaOutput, price.output))
+        if (deltaCost > 0) {
+          const { inputCost, outputCost } = splitCost(
+            deltaInput, deltaCacheRead, deltaOutput, deltaCost,
+            info?.modelID ?? "",
+            props.api.state.provider ?? []
+          )
+          setTotalInputCost(prev => prev + inputCost)
+          setTotalOutputCost(prev => prev + outputCost)
         }
       }
       if (DEBUG && itemLogLines.length > 0) {
@@ -638,21 +417,31 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
 
     const model = currentModel()
     setActiveModel(model)
-    log("createEffect: sessionID:", sessionID, "model:", model, "loadedSessionID:", loadedSessionID, "isCopilot:", model ? isCopilotModel(model) : false)
+    log("createEffect: sessionID:", sessionID, "model:", model, "loadedSessionID:", loadedSessionID, "isSupported:", model ? isSupportedModel(model) : false)
 
-    // Fetch quota first so planType is available for fetchSessionUsage
-    fetchQuota().then(() => {
-      if (model && isCopilotModel(model)) {
-        loadRelatedSessionTokens(sessionID, cfg)
+    if (model && isSupportedModel(model)) {
+      loadRelatedSessionTokens(sessionID, cfg) // works for both
+      if (model.toLowerCase().includes("copilot")) {
+        // Copilot: fetch session usage + quota
         if (loadedSessionID !== sessionID) {
           setSessionLoading(true)
           fetchSessionUsage(sessionID).then(() => setSessionLoading(false))
         }
-      } else {
-        setSessionLoading(false)
-        if (loadedSessionID !== sessionID) setSessionUsage(0)
+        fetchQuota()
       }
-    })
+      if (model.toLowerCase().includes("opencode-go")) {
+        // opencode-go: fetch go quota
+        setGoQuotaLoading(true)
+        fetchGoQuota().then((info) => {
+          setGoQuota(info)
+        }).finally(() => {
+          setGoQuotaLoading(false)
+        })
+      }
+    } else {
+      setSessionLoading(false)
+      if (loadedSessionID !== sessionID) setSessionUsage(0)
+    }
 
     const unsubMessageAll = props.api.event.on("message.updated", (event: any) => {
       try {
@@ -708,20 +497,25 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
             const inputTok: number = (msg as any)?.tokens?.input ?? 0
             const cacheReadTok: number = (msg as any)?.tokens?.cache?.read ?? 0
             const outputTok: number = (msg as any)?.tokens?.output ?? 0
-            if (inputTok > 0 || cacheReadTok > 0 || outputTok > 0) {
-              const prevSnapshot = processedAssistantMessages.get(msgId) ?? { input: 0, cacheRead: 0, output: 0 }
+            const msgCost: number = (msg as any)?.cost ?? 0
+            if (inputTok > 0 || cacheReadTok > 0 || outputTok > 0 || msgCost > 0) {
+              const prevSnapshot = processedAssistantMessages.get(msgId) ?? { input: 0, cacheRead: 0, output: 0, cost: 0 }
               const deltaInput = Math.max(0, inputTok - prevSnapshot.input)
               const deltaCacheRead = Math.max(0, cacheReadTok - prevSnapshot.cacheRead)
               const deltaOutput = Math.max(0, outputTok - prevSnapshot.output)
-              if (deltaInput > 0 || deltaCacheRead > 0 || deltaOutput > 0) {
-                processedAssistantMessages.set(msgId, { input: inputTok, cacheRead: cacheReadTok, output: outputTok })
-                const modelId: string = (msg as any)?.modelID ?? ""
-                const price = getTokenPrice(modelId, config())
+              const deltaCost = Math.max(0, msgCost - prevSnapshot.cost)
+              if (deltaInput > 0 || deltaCacheRead > 0 || deltaOutput > 0 || deltaCost > 0) {
+                processedAssistantMessages.set(msgId, { input: inputTok, cacheRead: cacheReadTok, output: outputTok, cost: msgCost })
                 updatePeakContext(evtSID, inputTok, cacheReadTok, outputTok)
                 setTotalOutputTokens((prev) => prev + deltaOutput)
-                if (price) {
-                  setTotalInputCost((prev) => prev + calcCost(deltaInput, price.input) + calcCost(deltaCacheRead, price.cacheRead ?? 0))
-                  setTotalOutputCost((prev) => prev + calcCost(deltaOutput, price.output))
+                if (deltaCost > 0) {
+                  const { inputCost, outputCost } = splitCost(
+                    deltaInput, deltaCacheRead, deltaOutput, deltaCost,
+                    (msg as any)?.modelID ?? "",
+                    props.api.state.provider ?? []
+                  )
+                  setTotalInputCost(prev => prev + inputCost)
+                  setTotalOutputCost(prev => prev + outputCost)
                 }
               }
             }
@@ -767,11 +561,23 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
       fetchQuota()
     }, QUOTA_REFRESH_MS)
 
+    const goRefreshInterval = setInterval(() => {
+      if (currentModel()?.toLowerCase().includes("opencode-go")) {
+        setGoQuotaLoading(true)
+        fetchGoQuota().then((info) => {
+          setGoQuota(info)
+        }).finally(() => {
+          setGoQuotaLoading(false)
+        })
+      }
+    }, QUOTA_REFRESH_MS)
+
     onCleanup(() => {
       unsubMessageAll()
       unsubCompacted()
       unsubSessionCreated()
       clearInterval(refreshInterval)
+      clearInterval(goRefreshInterval)
     })
   })
 
@@ -785,9 +591,17 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
 
   const usageColor = createMemo(() => getUsageColor(usagePercentage()))
 
-  const isCopilot = createMemo(() => {
+  const isSupported = createMemo(() => {
     const model = currentModel()
-    return !!(model && isCopilotModel(model))
+    return !!(model && isSupportedModel(model))
+  })
+
+  const providerLabel = createMemo(() => {
+    const model = currentModel()
+    if (!model) return "Usage"
+    if (model.toLowerCase().includes("opencode-go")) return "OpenCode Go Usage"
+    if (model.toLowerCase().includes("copilot")) return "GitHub Copilot Usage"
+    return "Usage"
   })
 
   const isActiveModelDeprecated = createMemo(() => {
@@ -797,14 +611,17 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
     return isModelDeprecated(modelId, config())
   })
 
-  log("CopilotUsageSidebar: render, isCopilot:", isCopilot(), "activeModel:", currentModel())
+  const isCopilotActive = createMemo(() => currentModel()?.toLowerCase().includes("copilot") ?? false)
+  const isOpenCodeGoActive = createMemo(() => currentModel()?.toLowerCase().includes("opencode-go") ?? false)
+
+  log("UsageSidebar: render, isSupported:", isSupported(), "activeModel:", currentModel())
 
   return (
     <box flexDirection="column" gap={0}>
-      {isCopilot() ? (
+      {isSupported() ? (
         <>
-          <text fg={props.api.theme.current?.foreground ?? "#ffffff"}><strong>Github Copilot Usage</strong></text>
-          {!quotaInfo()?.tokenBasedBilling && (
+          <text fg={props.api.theme.current?.foreground ?? "#ffffff"}><strong>{providerLabel()}</strong></text>
+          {isCopilotActive() && !quotaInfo()?.tokenBasedBilling && (
             <>
               <text fg={props.api.theme.current?.muted ?? "#888888"}>Current Session</text>
               {sessionLoading() ? (
@@ -818,52 +635,80 @@ function CopilotUsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
           {isActiveModelDeprecated() && (
             <text fg="#ef4444">⚠ Model deprecated</text>
           )}
-          <text fg="#ffffff">{formatCostLine("↑", peakInputTokens(), totalInputCost())}</text>
-          <text fg="#ffffff">{formatCostLine("↓", totalOutputTokens(), totalOutputCost())}</text>
+          <text fg="#ffffff">{("↑ " + peakInputTokens().toLocaleString() + " tokens").padEnd(26) + "$" + totalInputCost().toFixed(2)}</text>
+          <text fg="#ffffff">{("↓ " + totalOutputTokens().toLocaleString() + " tokens").padEnd(26) + "$" + totalOutputCost().toFixed(2)}</text>
           <text fg={props.api.theme.current?.foreground ?? "#ffffff"}>
             {"Total".padEnd(26) + "$" + (totalInputCost() + totalOutputCost()).toFixed(2)}
           </text>
-          <text fg={props.api.theme.current?.muted ?? "#888888"}>Monthly quota</text>
-          {!hasToken ? (
-            <text fg="#eab308">No token provided (set GITHUB_TOKEN)</text>
-          ) : quotaInfo()?.unlimited ? (
-            <text fg="#22c55e">Unlimited</text>
-          ) : quotaInfo() ? (
-            <box flexDirection="column" gap={0}>
-              <text fg={usageColor()}>{usagePercentage().toFixed(1)}% used</text>
-              <text fg={usageColor()}>{buildProgressBar(usagePercentage())}</text>
-              <text fg="#ffffff">
-                {(quotaInfo()!.entitlement - quotaInfo()!.remaining).toLocaleString()} / {quotaInfo()!.entitlement.toLocaleString()} {getQuotaLabel(quotaInfo()!)}
-              </text>
-            </box>
-          ) : quotaLoading() ? (
-            <text fg="#888888">Loading...</text>
-          ) : (
-            <text fg="#888888">Unable to fetch quota</text>
-          )}
+          {isCopilotActive() ? (
+            <>
+              <text fg={props.api.theme.current?.muted ?? "#888888"}>Monthly quota</text>
+              {!hasToken ? (
+                <text fg="#eab308">No token provided (set GITHUB_TOKEN)</text>
+              ) : quotaInfo()?.unlimited ? (
+                <text fg="#22c55e">Unlimited</text>
+              ) : quotaInfo() ? (
+                <box flexDirection="column" gap={0}>
+                  <text fg={usageColor()}>{usagePercentage().toFixed(1)}% used</text>
+                  <text fg={usageColor()}>{buildProgressBar(usagePercentage())}</text>
+                  <text fg="#ffffff">
+                    {(quotaInfo()!.entitlement - quotaInfo()!.remaining).toLocaleString()} / {quotaInfo()!.entitlement.toLocaleString()} {getQuotaLabel(quotaInfo()!)}
+                  </text>
+                </box>
+              ) : quotaLoading() ? (
+                <text fg="#888888">Loading...</text>
+              ) : (
+                <text fg="#888888">Unable to fetch quota</text>
+              )}
+            </>
+          ) : isOpenCodeGoActive() ? (
+            <>
+              <text fg={props.api.theme.current?.muted ?? "#888888"}>Quota</text>
+              {goQuotaLoading() ? (
+                <text fg="#888888">Loading...</text>
+              ) : goQuota() ? (
+                /* If all three bars are null or at 0%, the web page couldn't authenticate */
+                (goQuota()!.rolling?.usagePercent ?? 0) === 0 &&
+                (goQuota()!.weekly?.usagePercent ?? 0) === 0 &&
+                (goQuota()!.monthly?.usagePercent ?? 0) === 0 ? (
+                  <box flexDirection="column" gap={0}>
+                    <text fg="#eab308">⚠ Unable to fetch Go quota</text>
+                    <text fg={props.api.theme.current?.muted ?? "#888888"}>Set OPENCODE_GO_AUTH_COOKIE with your browser's auth cookie</text>
+                  </box>
+                ) : (
+                  <box flexDirection="column" gap={0}>
+                    <text fg={props.api.theme.current?.muted ?? "#888888"}>Rolling (5h)</text>
+                    <text fg={getUsageColor(goQuota()!.rolling?.usagePercent ?? 0)}>
+                      {goQuota()!.rolling?.usagePercent ?? 0}% · resets in {formatDuration(goQuota()!.rolling?.resetInSec ?? 0)}
+                    </text>
+                    <text fg={getUsageColor(goQuota()!.rolling?.usagePercent ?? 0)}>
+                      {buildProgressBar(goQuota()!.rolling?.usagePercent ?? 0)}
+                    </text>
+                    <text fg={props.api.theme.current?.muted ?? "#888888"}>Weekly</text>
+                    <text fg={getUsageColor(goQuota()!.weekly?.usagePercent ?? 0)}>
+                      {goQuota()!.weekly?.usagePercent ?? 0}% · resets in {formatDuration(goQuota()!.weekly?.resetInSec ?? 0)}
+                    </text>
+                    <text fg={getUsageColor(goQuota()!.weekly?.usagePercent ?? 0)}>
+                      {buildProgressBar(goQuota()!.weekly?.usagePercent ?? 0)}
+                    </text>
+                    <text fg={props.api.theme.current?.muted ?? "#888888"}>Monthly</text>
+                    <text fg={getUsageColor(goQuota()!.monthly?.usagePercent ?? 0)}>
+                      {goQuota()!.monthly?.usagePercent ?? 0}% · resets in {formatDuration(goQuota()!.monthly?.resetInSec ?? 0)}
+                    </text>
+                    <text fg={getUsageColor(goQuota()!.monthly?.usagePercent ?? 0)}>
+                      {buildProgressBar(goQuota()!.monthly?.usagePercent ?? 0)}
+                    </text>
+                  </box>
+                )
+              ) : (
+                <text fg="#888888">Set OPENCODE_GO_WORKSPACE_ID + OPENCODE_GO_AUTH_COOKIE for Go quota</text>
+              )}
+            </>
+          ) : null}
         </>
       ) : null}
     </box>
   )
 }
 
-const tui: TuiPlugin = async (api) => {
-  log("copilot-usage: tui function called")
-  api.slots.register({
-    order: 175,
-    slots: {
-      sidebar_content(_ctx, props) {
-        log("copilot-usage: rendering sidebar_content, session_id:", props.session_id)
-        return <CopilotUsageSidebar api={api} session_id={props.session_id} />
-      },
-    },
-  })
-  log("copilot-usage: slot registered")
-}
-
-const plugin: TuiPluginModule & { id: string } = {
-  id: "copilot-usage",
-  tui,
-}
-
-export default plugin
+export default UsageSidebar
