@@ -25,7 +25,8 @@ Sidebar widget + `/usage` slash command (`Ctrl+Shift+U`) showing token usage and
 - **opencode-go** — rolling (5h), weekly, and monthly quota scraped from opencode.ai
 
 **`/usage` command:** Monthly token breakdown per model (top 10) with progress bars, queried from OpenCode's SQLite database.
-- **Month navigation** — `←` `→` arrows to browse past months (cached instantly)
+- **Month navigation** — `←` `→` arrows to browse past months, hard-capped at earliest database record. Dynamic arrow hints show available directions.
+- **Today** — `t` to jump back to the current month
 - **Reload** — `r` to refresh current month data
 - **Scroll** — `↑` `↓` (or `j` `k`) with overflow hints (`▲` / `▼`)
 - **Persistent cache** — past months saved to disk for instant recall
