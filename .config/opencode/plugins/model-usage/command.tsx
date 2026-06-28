@@ -6,7 +6,7 @@ import { homedir } from "node:os"
 import { onMount, onCleanup, createSignal } from "solid-js"
 import { getMonthInfo, isCurrentMonth, fmt, fmtCost, buildBar, randomReloadMessage } from "./helpers"
 import type { UsageData } from "./types"
-import { queryUsage } from "./db"
+import { queryUsage, getEarliestUsageDate } from "./db"
 
 // ─── Persistent multi-month cache ─────────────────────────────────────────
 const CACHE_DIR = `${homedir()}/.config/opencode/plugins/model-usage`
@@ -95,6 +95,21 @@ export function registerUsageCommand(api: TuiPluginApi) {
               )
             })
             return
+          }
+
+          // ── Determine earliest month with data ──────────────────────────
+          let minMonthOffset = 0
+          {
+            const earliestMs = getEarliestUsageDate(dbPath)
+            if (earliestMs != null) {
+              const earliestDate = new Date(earliestMs)
+              const earliestYear = earliestDate.getUTCFullYear()
+              const earliestMonth = earliestDate.getUTCMonth()
+              const currentYear = now.getUTCFullYear()
+              const currentMonth = now.getUTCMonth()
+              const monthsBack = (currentYear * 12 + currentMonth) - (earliestYear * 12 + earliestMonth)
+              minMonthOffset = -monthsBack
+            }
           }
 
           // ── State ────────────────────────────────────────────────────────
@@ -187,6 +202,7 @@ export function registerUsageCommand(api: TuiPluginApi) {
 
           function handleKey(key: string) {
             if (key === "left" || key === "h") {
+              if (monthOffset() <= minMonthOffset) return true  // hard cap: no older months available
               setMonthOffset(p => p - 1)
               setIsScrolled(false)
               setIsAtBottom(false)
@@ -206,6 +222,14 @@ export function registerUsageCommand(api: TuiPluginApi) {
               if (isCurrentMonth(startMs)) {
                 loadMonth(true)
               }
+              return true
+            }
+            if (key === "t") {
+              if (monthOffset() === 0) return true  // already at current month
+              setMonthOffset(0)
+              setIsScrolled(false)
+              setIsAtBottom(false)
+              setTimeout(() => loadMonth(), 10)
               return true
             }
             if (key === "up") {
@@ -234,6 +258,17 @@ export function registerUsageCommand(api: TuiPluginApi) {
           // ── Reactive dialog ─────────────────────────────────────────────
           api.ui.dialog.replace(() => {
             const { label } = computeMonth()
+            const offset = monthOffset()
+            let arrows: string
+            if (minMonthOffset === 0) {
+              arrows = ""                    // Case 4: only month available
+            } else if (offset >= 0) {
+              arrows = " ←"                  // Case 1: at current month, can only go older
+            } else if (offset <= minMonthOffset) {
+              arrows = " →"                  // Case 3: at oldest month, can only go newer
+            } else {
+              arrows = " ← →"                // Case 2: middle month, both directions
+            }
             onMount(() => {
               api.ui.dialog.setSize("large")
               // Register dialog key layer
@@ -244,6 +279,7 @@ export function registerUsageCommand(api: TuiPluginApi) {
                   { key: "right", cmd: "usage.navRight", desc: "Next month" },
                   { key: "l",     cmd: "usage.navRight", desc: "Next month" },
                   { key: "r",     cmd: "usage.reload",   desc: "Reload" },
+                  { key: "t",     cmd: "usage.today",   desc: "Today" },
                   { key: "up",   cmd: "usage.scrollUp",   desc: "Scroll up" },
                   { key: "k",    cmd: "usage.scrollUp",   desc: "Scroll up" },
                   { key: "down", cmd: "usage.scrollDown", desc: "Scroll down" },
@@ -253,6 +289,7 @@ export function registerUsageCommand(api: TuiPluginApi) {
                   { name: "usage.navLeft",   title: "Previous Month", async run() { handleKey("left") } },
                   { name: "usage.navRight",  title: "Next Month",     async run() { handleKey("right") } },
                   { name: "usage.reload",    title: "Reload Usage",   async run() { handleKey("r") } },
+                  { name: "usage.today",    title: "Today",        async run() { handleKey("t") } },
                   { name: "usage.scrollUp",   title: "Scroll Up",   async run() { handleKey("up") } },
                   { name: "usage.scrollDown", title: "Scroll Down", async run() { handleKey("down") } },
                 ],
@@ -261,12 +298,17 @@ export function registerUsageCommand(api: TuiPluginApi) {
               loadMonth()
               // Background: prefetch past months so navigation is instant
               setTimeout(() => {
+                // Compute earliest month timestamp from the data cap
+                const minMonthYear = now.getUTCFullYear() + Math.floor((now.getUTCMonth() + minMonthOffset) / 12)
+                const minMonthMonth = ((now.getUTCMonth() + minMonthOffset) % 12 + 12) % 12
+                const minPrefetchMs = Date.UTC(minMonthYear, minMonthMonth, 1)
+
                 let m = now.getUTCMonth() - 1
                 let y = now.getUTCFullYear()
                 while (true) {
                   if (m < 0) { m = 11; y-- }
-                  if (y < 2024) break
                   const startMs = Date.UTC(y, m, 1)
+                  if (startMs < minPrefetchMs) break
                   if (getCached(startMs)) { m--; continue }
                   const endMs = Date.UTC(y, m + 1, 1)
                   const result = queryUsage(dbPath, startMs, endMs)
@@ -289,7 +331,7 @@ export function registerUsageCommand(api: TuiPluginApi) {
                 <box flexDirection="row" justifyContent="space-between">
                   <box flexDirection="row" gap={1}>
                     <text fg={fg}><b>Usage</b></text>
-                    <text fg={muted}>{label} ← →</text>
+                    <text fg={muted}>{label}{arrows}</text>
                   </box>
                   <text fg={muted}>esc</text>
                 </box>
@@ -353,7 +395,7 @@ export function registerUsageCommand(api: TuiPluginApi) {
                 })()}
                 {reloading() && <text fg={muted}>{reloadMsg()}</text>}
                 {hasLoadedOnce() && (
-                  <text fg={muted}>← → month  ·  r reload  ·  ↑↓ scroll</text>
+                  <text fg={muted}>t today  ·  ← → month  ·  r reload  ·  ↑↓ scroll</text>
                 )}
               </box>
             )

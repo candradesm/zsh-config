@@ -62,3 +62,24 @@ export function queryUsage(dbPath: string, startMs: number, endMs: number): Usag
     }
   }
 }
+
+export function getEarliestUsageDate(dbPath: string): number | null {
+  let db: Database | null = null
+  try {
+    db = new Database(dbPath, { readonly: true })
+    const row = db
+      .query(
+        `SELECT MIN(time_created) AS earliest
+         FROM message
+         WHERE json_extract(data, '$.role') = 'assistant'`
+      )
+      .get() as { earliest: number | null } | undefined
+    db.close()
+    db = null
+    return row?.earliest ?? null
+  } catch {
+    return null
+  } finally {
+    try { db?.close() } catch { /* ignore */ }
+  }
+}
