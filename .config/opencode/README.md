@@ -6,23 +6,29 @@ Configuration for [OpenCode](https://opencode.ai/) — agents, plugins, skills, 
 
 ### jungle-mode (Server + TUI)
 
-Jungle Mode plugin that injects a themed persona (Warrior Monke 🦧, Junior Monke Developer 🐵, Assert Ape 🐒, Quality Quacker 🦆🔍, GOAT Roaster 🐐) into chat messages based on the active agent. Enabled/disabled via `jungle-mode.json` config.
+Jungle Mode plugin that injects a themed persona into primary agents (coordinator, plan, build) and subagents (developer, testing, qa, reviewer). Enabled/disabled via `/jungle` command or `Ctrl+Shift+M`.
 
-**Server (`jungle-mode-server.ts`):** Hooks into `chat.message` to prepend the matching jungle persona to the message.
+**Server (`jungle-mode-server.ts`):** Injects jungle persona into all primary agents (coordinator 🦧, plan 🐵, build 🐵) via system prompt, and prepends persona to subagent messages.
 
-**TUI (`jungle-mode.tsx`):** Sidebar, command, and prompt indicator for jungle mode status.
+**TUI (`jungle-mode.tsx`):** Sidebar indicator, `/jungle` toggle command, and prompt indicator showing jungle mode status.
+
+**Personas:** Warrior Monke 🦧 (coordinator), Junior Monke 🐵 (plan/build), Junior Monke Developer 🐵 (developer), Assert Ape 🐒 (testing), Quality Quacker 🦆🔍 (qa), GOAT Roaster 🐐 (reviewer)
 
 **Files:** `plugins/jungle-mode-server.ts`, `plugins/jungle-mode.tsx`, `plugins/jungle-mode/`
 
 ### model-usage (TUI)
 
-Sidebar widget + `/usage` slash command showing token usage and quota across providers.
+Sidebar widget + `/usage` slash command (`Ctrl+Shift+U`) showing token usage and quota across providers.
 
 **Sidebar:** Cost estimation (price-weighted input/output split from API) plus provider-specific quota:
 - **GitHub Copilot** — premium request counting + monthly quota from GitHub API
 - **opencode-go** — rolling (5h), weekly, and monthly quota scraped from opencode.ai
 
 **`/usage` command:** Monthly token breakdown per model (top 10) with progress bars, queried from OpenCode's SQLite database.
+- **Month navigation** — `←` `→` arrows to browse past months (cached instantly)
+- **Reload** — `r` to refresh current month data
+- **Scroll** — `↑` `↓` (or `j` `k`) with overflow hints (`▲` / `▼`)
+- **Persistent cache** — past months saved to disk for instant recall
 
 **Files:** `plugins/model-usage.tsx`, `plugins/model-usage.config.json`, `plugins/model-usage/`
 **Requires:** `GITHUB_TOKEN` (for Copilot quota), `OPENCODE_GO_WORKSPACE_ID` + `OPENCODE_GO_AUTH_COOKIE` (for Go quota)
