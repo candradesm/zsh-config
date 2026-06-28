@@ -3,7 +3,7 @@ import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs"
 import { homedir } from "node:os"
 
-import { onMount, createSignal } from "solid-js"
+import { onMount, onCleanup, createSignal } from "solid-js"
 import { getMonthInfo, isCurrentMonth, fmt, fmtCost, buildBar, randomReloadMessage } from "./helpers"
 import type { UsageData } from "./types"
 import { queryUsage } from "./db"
@@ -99,6 +99,9 @@ export function registerUsageCommand(api: TuiPluginApi) {
 
           // ── State ────────────────────────────────────────────────────────
           const [monthOffset, setMonthOffset] = createSignal(0)
+          let scrollRef: any = null
+          const [isScrolled, setIsScrolled] = createSignal(false)
+          const [isAtBottom, setIsAtBottom] = createSignal(false)
 
           const computeMonth = () => {
             const m = now.getUTCMonth() + monthOffset()
@@ -185,16 +188,16 @@ export function registerUsageCommand(api: TuiPluginApi) {
           function handleKey(key: string) {
             if (key === "left" || key === "h") {
               setMonthOffset(p => p - 1)
-              setViewState("loading")
-              setReloading(false)
+              setIsScrolled(false)
+              setIsAtBottom(false)
               setTimeout(() => loadMonth(), 10)
               return true
             }
             if (key === "right" || key === "l") {
               setMonthOffset(p => p + 1)
               if (monthOffset() + 1 > 0) return true  // don't go past current
-              setViewState("loading")
-              setReloading(false)
+              setIsScrolled(false)
+              setIsAtBottom(false)
               setTimeout(() => loadMonth(), 10)
               return true
             }
@@ -203,6 +206,26 @@ export function registerUsageCommand(api: TuiPluginApi) {
               if (isCurrentMonth(startMs)) {
                 loadMonth(true)
               }
+              return true
+            }
+            if (key === "up") {
+              scrollRef?.scrollBy?.(-10)
+              setIsAtBottom(false)
+              setTimeout(() => {
+                const top = scrollRef?.scrollTop ?? 0
+                if (top <= 0) setIsScrolled(false)
+              }, 50)
+              return true
+            }
+            if (key === "down") {
+              scrollRef?.scrollBy?.(10)
+              setIsScrolled(true)
+              setTimeout(() => {
+                const st = scrollRef?.scrollTop ?? 0
+                const ch = scrollRef?.clientHeight ?? scrollRef?.height ?? 40
+                const sh = scrollRef?.scrollHeight ?? 0
+                setIsAtBottom(st + ch >= sh - 5)
+              }, 50)
               return true
             }
             return false
@@ -221,15 +244,44 @@ export function registerUsageCommand(api: TuiPluginApi) {
                   { key: "right", cmd: "usage.navRight", desc: "Next month" },
                   { key: "l",     cmd: "usage.navRight", desc: "Next month" },
                   { key: "r",     cmd: "usage.reload",   desc: "Reload" },
+                  { key: "up",   cmd: "usage.scrollUp",   desc: "Scroll up" },
+                  { key: "k",    cmd: "usage.scrollUp",   desc: "Scroll up" },
+                  { key: "down", cmd: "usage.scrollDown", desc: "Scroll down" },
+                  { key: "j",    cmd: "usage.scrollDown", desc: "Scroll down" },
                 ],
                 commands: [
-                  { name: "usage.navLeft",  title: "Previous Month", async run() { handleKey("left") } },
-                  { name: "usage.navRight", title: "Next Month",     async run() { handleKey("right") } },
-                  { name: "usage.reload",   title: "Reload Usage",   async run() { handleKey("r") } },
+                  { name: "usage.navLeft",   title: "Previous Month", async run() { handleKey("left") } },
+                  { name: "usage.navRight",  title: "Next Month",     async run() { handleKey("right") } },
+                  { name: "usage.reload",    title: "Reload Usage",   async run() { handleKey("r") } },
+                  { name: "usage.scrollUp",   title: "Scroll Up",   async run() { handleKey("up") } },
+                  { name: "usage.scrollDown", title: "Scroll Down", async run() { handleKey("down") } },
                 ],
               })
               // Initial load
               loadMonth()
+              // Background: prefetch past months so navigation is instant
+              setTimeout(() => {
+                let m = now.getUTCMonth() - 1
+                let y = now.getUTCFullYear()
+                while (true) {
+                  if (m < 0) { m = 11; y-- }
+                  if (y < 2024) break
+                  const startMs = Date.UTC(y, m, 1)
+                  if (getCached(startMs)) { m--; continue }
+                  const endMs = Date.UTC(y, m + 1, 1)
+                  const result = queryUsage(dbPath, startMs, endMs)
+                  setCached(startMs, { result, month: startMs, cachedAt: Date.now() })
+                  // Stop if no data this far back
+                  if (!("error" in result) && result.models.length === 0) break
+                  m--
+                }
+              }, 500)
+            })
+            onCleanup(() => {
+              if (dialogKeyLayer) {
+                try { dialogKeyLayer() } catch { /* ignore */ }
+                dialogKeyLayer = null
+              }
             })
 
             return (
@@ -241,52 +293,67 @@ export function registerUsageCommand(api: TuiPluginApi) {
                   </box>
                   <text fg={muted}>esc</text>
                 </box>
-                {viewState() === "loading" ? (
-                  <text fg={muted}>Loading usage data…</text>
-                ) : viewState() === "error" ? (
-                  <box flexDirection="column" gap={1}>
-                    <text fg={red}><b>Error Fetching Usage</b></text>
-                    <text fg={muted}>{errorMsg()}</text>
-                  </box>
-                ) : (
-                  (() => {
-                    const data = viewState() as UsageData
-                    const { models, totalInput, totalOutput, totalCost } = data
-                    const totalTokens = totalInput + totalOutput
-                    const hasCost = totalCost > 0
-                    const emptyResult = models.length === 0
-                    return emptyResult ? (
-                      <text fg={muted}>No usage data for {label}.</text>
-                    ) : (
-                      <box paddingBottom={1}>
-                        <text> </text>
-                        <text fg={fg}>Total: {fmt(totalTokens)} tokens{hasCost ? ` (${fmtCost(totalCost)})` : ""}</text>
-                        <text fg={muted}>  ↑ Input:  {fmt(totalInput)} tokens</text>
-                        <text fg={muted}>  ↓ Output: {fmt(totalOutput)} tokens</text>
-                        <text> </text>
-                        <text fg={fg}><b>Per Model</b> (top {models.length})</text>
-                        <text> </text>
-                        {models.map((m, i) => {
-                          const modelTokens = m.totalInput + m.totalOutput
-                          const pct = totalTokens > 0 ? (modelTokens / totalTokens) * 100 : 0
-                          const displayName = `${m.providerId}/${m.modelId}`
-                          const modelHasCost = m.totalCost > 0
-                          return (
-                            <box key={m.providerId + "/" + m.modelId} flexDirection="column" gap={1}>
-                              <text fg={fg}>{i + 1}. {displayName}</text>
-                              <text fg={muted}>{fmt(modelTokens)} tokens ({pct.toFixed(1)}%){modelHasCost ? ` — ${fmtCost(m.totalCost)}` : ""}</text>
-                              <text fg={fg}>{buildBar(pct, 50)}</text>
-                              {i < models.length - 1 && <text> </text>}
-                            </box>
-                          )
-                        })}
-                      </box>
-                    )
-                  })()
-                )}
+                {(() => {
+                  const data = viewState()
+                  const hasOverflow = data && typeof data === "object" && !("error" in data) && data.models.length > 5
+                  return (
+                    <text fg={muted}>{hasOverflow && isScrolled() ? "▲ more above" : " "}</text>
+                  )
+                })()}
+                <scrollbox ref={scrollRef} flexDirection="column" gap={1} maxHeight={40} scrollbarOptions={{ visible: false }}>
+                  {viewState() === "loading" ? (
+                    <text fg={muted}>Loading usage data…</text>
+                  ) : viewState() === "error" ? (
+                    <box flexDirection="column" gap={1}>
+                      <text fg={red}><b>Error Fetching Usage</b></text>
+                      <text fg={muted}>{errorMsg()}</text>
+                    </box>
+                  ) : (
+                    (() => {
+                      const data = viewState() as UsageData
+                      const { models, totalInput, totalOutput, totalCost } = data
+                      const totalTokens = totalInput + totalOutput
+                      const hasCost = totalCost > 0
+                      const emptyResult = models.length === 0
+                      return emptyResult ? (
+                        <text fg={muted}>No usage data for {label}.</text>
+                      ) : (
+                        <box paddingBottom={1}>
+                          <text fg={fg}>Total: {fmt(totalTokens)} tokens{hasCost ? ` (${fmtCost(totalCost)})` : ""}</text>
+                          <text fg={muted}>  ↑ Input:  {fmt(totalInput)} tokens</text>
+                          <text fg={muted}>  ↓ Output: {fmt(totalOutput)} tokens</text>
+                          <text> </text>
+                          <text fg={fg}><b>Per Model</b> (top {models.length})</text>
+                          <text> </text>
+                          {models.map((m, i) => {
+                            const modelTokens = m.totalInput + m.totalOutput
+                            const pct = totalTokens > 0 ? (modelTokens / totalTokens) * 100 : 0
+                            const displayName = `${m.providerId}/${m.modelId}`
+                            const modelHasCost = m.totalCost > 0
+                            return (
+                              <box key={m.providerId + "/" + m.modelId} flexDirection="column" gap={1}>
+                                <text fg={fg}>{i + 1}. {displayName}</text>
+                                <text fg={muted}>{fmt(modelTokens)} tokens ({pct.toFixed(1)}%){modelHasCost ? ` — ${fmtCost(m.totalCost)}` : ""}</text>
+                                <text fg={fg}>{buildBar(pct, 50)}</text>
+                                {i < models.length - 1 && <text> </text>}
+                              </box>
+                            )
+                          })}
+                        </box>
+                      )
+                    })()
+                  )}
+                </scrollbox>
+                {(() => {
+                  const data = viewState()
+                  const hasOverflow = data && typeof data === "object" && !("error" in data) && data.models.length > 5
+                  return (
+                    <text fg={muted}>{hasOverflow && !isAtBottom() ? "▼ more below" : " "}</text>
+                  )
+                })()}
                 {reloading() && <text fg={muted}>{reloadMsg()}</text>}
                 {hasLoadedOnce() && (
-                  <text fg={muted}>← → month  ·  r reload</text>
+                  <text fg={muted}>← → month  ·  r reload  ·  ↑↓ scroll</text>
                 )}
               </box>
             )
