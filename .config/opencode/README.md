@@ -43,7 +43,7 @@ Desktop notifications for session events.
 - Sound support, configurable via `notifications.config.jsonc`
 - Subagent completion filtering, permission type debouncing
 
-**Files:** `plugins/notifications.js`, `plugins/notifications.config.jsonc`
+**Files:** `plugins/notifications.ts`, `plugins/notifications.config.jsonc`
 
 ## Skills
 

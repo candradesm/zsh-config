@@ -194,8 +194,8 @@ export function registerUsageCommand(api: TuiPluginApi) {
               return true
             }
             if (key === "right" || key === "l") {
+              if (monthOffset() >= 0) return true  // already at current month, don't go past
               setMonthOffset(p => p + 1)
-              if (monthOffset() + 1 > 0) return true  // don't go past current
               setIsScrolled(false)
               setIsAtBottom(false)
               setTimeout(() => loadMonth(), 10)
