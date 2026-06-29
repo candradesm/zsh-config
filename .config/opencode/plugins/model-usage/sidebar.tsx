@@ -18,8 +18,9 @@ const log = logFn
 import { fetchQuotaInfo, fetchGoQuota } from "./quota"
 
 const QUOTA_REFRESH_MS = 5 * 60 * 1000
+const QUOTA_EVENT_MIN_INTERVAL_MS = 2 * 60 * 1000  // min gap between event-driven fetches
 const MAX_POLL_ATTEMPTS = 30
-const PLUGIN_VERSION = "v35"
+const PLUGIN_VERSION = "v36"
 
 log(`=== usage-sidebar ${PLUGIN_VERSION} loaded ===`)
 
@@ -130,6 +131,7 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
   let tokenConfigSnapshot: CopilotConfig | null = null
   let tokenLoadGeneration = 0
   let loadedAllSessionsForRoot: string | null = null
+  let lastQuotaFetchAt = 0  // timestamp of last event-driven fetchQuota call
 
   // Load config once on mount
   loadConfig().then((cfg) => { setConfig(cfg); setConfigLoaded(true) }).catch((err) => log("loadConfig failed:", String(err)))
@@ -376,6 +378,7 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
       return
     }
     log("fetchQuota: starting, token length:", githubToken.length)
+    lastQuotaFetchAt = Date.now()
     // Only show loading on initial fetch — keep old data visible during refresh
     if (!quotaInfo()) setQuotaLoading(true)
     const info = await fetchQuotaInfo(githubToken)
@@ -415,6 +418,22 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
       log("createEffect: no sessionID, skipping")
       return
     }
+
+    // Determine if this is the root/primary session (no parentID) or a subagent session.
+    // Subagent "user" messages are coordinator instructions, not human requests — they must
+    // never trigger quota fetches or premium request counting. Default optimistic (true) so
+    // the first message in an unknown session still works; corrected below once the session
+    // list resolves.
+    let isRootSession = true
+    props.api.client.session.list({ limit: 200 })
+      .then((result: any) => {
+        const sessions = (result as any)?.data ?? result ?? []
+        const session = sessions.find((s: any) => (s.id ?? s.sessionID) === sessionID)
+        const parentID = session?.parentID ?? session?.info?.parentID
+        isRootSession = !parentID
+        log("createEffect: sessionID:", sessionID, "parentID:", parentID, "isRootSession:", isRootSession)
+      })
+      .catch(() => { /* keep optimistic true */ })
 
     const model = currentModel()
     setActiveModel(model)
@@ -486,7 +505,12 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
             const multiplier = calculateMessageMultiplier(msgId, parts, lastModel, isFreePlan, config(), messageMultipliers)
             if (multiplier > 0) {
               setSessionUsage((prev) => roundUsage(prev + multiplier))
-              fetchQuota()
+              // Only fetch quota from the root/primary session. Subagent sessions generate
+              // many "user" messages (coordinator instructions) that would spam the GitHub API.
+              // Also throttle: heavy sessions can still send many root-level messages quickly.
+              if (isRootSession && Date.now() - lastQuotaFetchAt > QUOTA_EVENT_MIN_INTERVAL_MS) {
+                fetchQuota()
+              }
             }
           }
         }
@@ -532,8 +556,12 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
 
       // Premium requests: refresh quota only for root session compaction (unchanged behaviour)
       if (evtSID === sessionID) {
-        fetchQuota()
-        log("session.compacted: quota refreshed, sessionID:", sessionID)
+        if (isRootSession && Date.now() - lastQuotaFetchAt > QUOTA_EVENT_MIN_INTERVAL_MS) {
+          fetchQuota()
+          log("session.compacted: quota refreshed, sessionID:", sessionID)
+        } else {
+          log("session.compacted: quota fetch skipped (subagent or too recent), sessionID:", sessionID)
+        }
       }
 
       // Token costs: when any tracked session is compacted, the old assistant messages are
