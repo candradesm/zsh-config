@@ -4,7 +4,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs"
 import { homedir } from "node:os"
 
 import { onMount, onCleanup, createSignal } from "solid-js"
-import { getMonthInfo, isCurrentMonth, fmt, fmtCost, buildBar, randomReloadMessage } from "./helpers"
+import { getMonthInfo, isCurrentMonth, fmt, fmtCost, buildBar } from "./helpers"
 import type { UsageData } from "./types"
 import { queryUsage, getEarliestUsageDate } from "./db"
 
@@ -128,8 +128,6 @@ export function registerUsageCommand(api: TuiPluginApi) {
 
           const [viewState, setViewState] = createSignal<"loading" | "error" | UsageData>("loading")
           const [errorMsg, setErrorMsg] = createSignal<string>("")
-          const [reloadMsg, setReloadMsg] = createSignal<string>("")
-          const [reloading, setReloading] = createSignal(false)
           const [hasLoadedOnce, setHasLoadedOnce] = createSignal(false)
 
           function loadMonth(forceRefresh: boolean = false) {
@@ -147,7 +145,6 @@ export function registerUsageCommand(api: TuiPluginApi) {
                 } else {
                   setViewState(data)
                 }
-                setReloading(false)
                 if (!hasLoadedOnce()) setHasLoadedOnce(true)
                 return
               }
@@ -178,15 +175,9 @@ export function registerUsageCommand(api: TuiPluginApi) {
             }
 
             // Background query
-            if (forceRefresh) {
-              setReloadMsg(`🔄 Reloading... ${randomReloadMessage()}`)
-              setReloading(true)
-            }
-
             setTimeout(() => {
               const result = queryUsage(dbPath, startMs, endMs)
               setCached(startMs, { result, month: startMs, cachedAt: Date.now() })
-              setReloading(false)
               if ("error" in result) {
                 setErrorMsg(result.error)
                 setViewState("error")
@@ -393,7 +384,6 @@ export function registerUsageCommand(api: TuiPluginApi) {
                     <text fg={muted}>{hasOverflow && !isAtBottom() ? "▼ more below" : " "}</text>
                   )
                 })()}
-                {reloading() && <text fg={muted}>{reloadMsg()}</text>}
                 {hasLoadedOnce() && (
                   <text fg={muted}>t today  ·  ← → month  ·  r reload  ·  ↑↓ scroll</text>
                 )}

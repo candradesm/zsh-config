@@ -20,7 +20,7 @@ import { fetchQuotaInfo, fetchGoQuota } from "./quota"
 const QUOTA_REFRESH_MS = 5 * 60 * 1000
 const QUOTA_EVENT_MIN_INTERVAL_MS = 2 * 60 * 1000  // min gap between event-driven fetches
 const MAX_POLL_ATTEMPTS = 30
-const PLUGIN_VERSION = "v36"
+const PLUGIN_VERSION = "v41"
 
 log(`=== usage-sidebar ${PLUGIN_VERSION} loaded ===`)
 
@@ -127,6 +127,8 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
   const peakPerSession = new Map<string, number>()
   const trackedSessions = new Set<string>()
   let loadedSessionID: string | null = null
+  let loadedQuotaSessionID: string | null = null
+  let loadedGoQuotaSessionID: string | null = null
   let loadedTokenRootSessionID: string | null = null
   let tokenConfigSnapshot: CopilotConfig | null = null
   let tokenLoadGeneration = 0
@@ -370,21 +372,42 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
     }
   }
 
+  let isFetchingQuota = false
+  let isFetchingGoQuota = false
+
   async function fetchQuota() {
+    if (isFetchingQuota) return
     if (!hasToken) {
       log("fetchQuota: no GITHUB_TOKEN set")
       setQuotaInfo(null)
       setQuotaLoading(false)
       return
     }
+    isFetchingQuota = true
     log("fetchQuota: starting, token length:", githubToken.length)
     lastQuotaFetchAt = Date.now()
     // Only show loading on initial fetch — keep old data visible during refresh
     if (!quotaInfo()) setQuotaLoading(true)
-    const info = await fetchQuotaInfo(githubToken)
-    log("fetchQuota: got info:", JSON.stringify(info))
-    setQuotaInfo(info)
-    setQuotaLoading(false)
+    try {
+      const info = await fetchQuotaInfo(githubToken)
+      log("fetchQuota: got info:", JSON.stringify(info))
+      setQuotaInfo(info)
+    } finally {
+      setQuotaLoading(false)
+      isFetchingQuota = false
+    }
+  }
+
+  async function fetchGoQuotaGuarded() {
+    if (isFetchingGoQuota) return
+    isFetchingGoQuota = true
+    try {
+      const info = await fetchGoQuota()
+      setGoQuota(info)
+    } finally {
+      setGoQuotaLoading(false)
+      isFetchingGoQuota = false
+    }
   }
 
   // Reactive model detection: re-runs when config.model or session changes
@@ -446,17 +469,20 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
         if (loadedSessionID !== sessionID) {
           setSessionLoading(true)
           fetchSessionUsage(sessionID).then(() => setSessionLoading(false))
+          fetchQuota()
+          loadedQuotaSessionID = sessionID
+        } else if (loadedQuotaSessionID !== sessionID) {
+          fetchQuota()
+          loadedQuotaSessionID = sessionID
         }
-        fetchQuota()
       }
       if (model.toLowerCase().includes("opencode-go")) {
-        // opencode-go: fetch go quota
-        setGoQuotaLoading(true)
-        fetchGoQuota().then((info) => {
-          setGoQuota(info)
-        }).finally(() => {
-          setGoQuotaLoading(false)
-        })
+        // opencode-go: fetch go quota once per session change
+        if (loadedGoQuotaSessionID !== sessionID) {
+          loadedGoQuotaSessionID = sessionID
+          setGoQuotaLoading(true)
+          fetchGoQuotaGuarded()
+        }
       }
     } else {
       setSessionLoading(false)
@@ -586,28 +612,29 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
       }
     })
 
-    const refreshInterval = setInterval(() => {
-      fetchQuota()
-    }, QUOTA_REFRESH_MS)
-
-    const goRefreshInterval = setInterval(() => {
-      if (currentModel()?.toLowerCase().includes("opencode-go")) {
-        setGoQuotaLoading(true)
-        fetchGoQuota().then((info) => {
-          setGoQuota(info)
-        }).finally(() => {
-          setGoQuotaLoading(false)
-        })
-      }
-    }, QUOTA_REFRESH_MS)
-
     onCleanup(() => {
       unsubMessageAll()
       unsubCompacted()
       unsubSessionCreated()
-      clearInterval(refreshInterval)
-      clearInterval(goRefreshInterval)
     })
+  })
+
+  // Quota refresh intervals — registered once outside createEffect so they are
+  // not cancelled and recreated on every reactive re-run (every message update).
+  const refreshInterval = setInterval(() => {
+    fetchQuota()
+  }, QUOTA_REFRESH_MS)
+
+  const goRefreshInterval = setInterval(() => {
+    if (currentModel()?.toLowerCase().includes("opencode-go")) {
+      setGoQuotaLoading(true)
+        fetchGoQuotaGuarded()
+    }
+  }, QUOTA_REFRESH_MS)
+
+  onCleanup(() => {
+    clearInterval(refreshInterval)
+    clearInterval(goRefreshInterval)
   })
 
   const usagePercentage = createMemo(() => {
@@ -653,7 +680,7 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
           {isCopilotActive() && !quotaInfo()?.tokenBasedBilling && (
             <>
               <text fg={props.api.theme.current?.muted ?? "#888888"}>Current Session</text>
-              {sessionLoading() ? (
+              {sessionLoading() && sessionUsage() === 0 ? (
                 <text fg={props.api.theme.current?.muted ?? "#888888"}>Loading...</text>
               ) : (
                 <text fg="#ffffff">{sessionUsage().toFixed(2)} {quotaInfo()?.planType === "free" ? "chat requests" : "premium requests"}</text>
