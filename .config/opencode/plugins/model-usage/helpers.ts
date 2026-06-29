@@ -34,21 +34,6 @@ export function isCurrentMonth(startMs: number): boolean {
   return startMs === currentStart
 }
 
-export const RELOAD_MESSAGES = [
-  "🐵 Counting bananzas...",
-  "🌴 Climbing the token tree...",
-  "🦍 Consulting Senior Engineer...",
-  "🍌 Harvesting usage data...",
-  "🐒 Swinging through the database...",
-  "🦆🔍 Quality checking your tokens...",
-  "🐐 Roasting your usage stats...",
-  "🌿 Foraging for premium requests...",
-]
-
-export function randomReloadMessage(): string {
-  return RELOAD_MESSAGES[Math.floor(Math.random() * RELOAD_MESSAGES.length)]
-}
-
 export function fmt(n: number): string {
   return n.toLocaleString("en-US")
 }
