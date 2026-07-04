@@ -1,8 +1,3 @@
-export interface CopilotConfig {
-  modelMultipliers: Record<string, number>
-  deprecated: string[]
-}
-
 export interface CopilotQuotaInfo {
   percentRemaining: number
   entitlement: number
@@ -12,7 +7,6 @@ export interface CopilotQuotaInfo {
   unlimited: boolean
   planType: "free" | "paid"
   quotaType: "premium" | "ai_credits"
-  tokenBasedBilling: boolean
 }
 
 export interface GoQuotaBar {
@@ -24,11 +18,6 @@ export interface GoQuotaInfo {
   rolling: GoQuotaBar | null
   weekly: GoQuotaBar | null
   monthly: GoQuotaBar | null
-}
-
-export interface MessagePart {
-  type: string
-  synthetic?: boolean
 }
 
 export interface ModelUsage {
@@ -53,3 +42,25 @@ export interface UsageData {
   totalOutput: number
   totalCost: number
 }
+
+// ─── System token analysis (Tier 1-4) ─────────────────────────────────────────
+
+export interface SystemFragment {
+  label: string
+  tokens: number
+}
+
+// Shape persisted by model-usage-server.ts to system-tokens.json
+export interface SystemSnapshot {
+  /** char/4 estimate of the full assembled system prompt */
+  t: number
+  /** ms timestamp of last measurement */
+  ts: number
+  /** per-fragment char/4 breakdown (top-N + "other"); absent on legacy entries */
+  fragments?: SystemFragment[]
+  /** raw assembled system prompt text; absent on legacy entries */
+  rawText?: string
+}
+
+export type SystemSource = "baseline DB" | "telemetry (est.)" | "server"
+

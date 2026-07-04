@@ -83,3 +83,35 @@ export function getEarliestUsageDate(dbPath: string): number | null {
     try { db?.close() } catch { /* ignore */ }
   }
 }
+
+/**
+ * Tier 1 system-token source: read the full assembled system baseline that the
+ * V2 native runner persists to `session_context_epoch.baseline` on every turn
+ * (written by `packages/core/src/session/context-epoch.ts`). Returns the raw
+ * baseline string, or `null` if the table is empty for this session (V1 / AI
+ * SDK path) or the table does not exist.
+ *
+ * The caller is responsible for tokenising the returned text (char/4).
+ */
+export function loadBaseline(dbPath: string, sessionID: string): string | null {
+  let db: Database | null = null
+  try {
+    db = new Database(dbPath, { readonly: true })
+    // Guard against older OpenCode builds that lack the table.
+    const table = db
+      .query(`SELECT name FROM sqlite_master WHERE type='table' AND name='session_context_epoch'`)
+      .get() as { name: string } | undefined
+    if (!table) return null
+    const row = db
+      .query(`SELECT baseline FROM session_context_epoch WHERE session_id = ?`)
+      .get(sessionID) as { baseline: string } | undefined
+    db.close()
+    db = null
+    if (!row || typeof row.baseline !== "string" || row.baseline.length === 0) return null
+    return row.baseline
+  } catch {
+    return null
+  } finally {
+    try { db?.close() } catch { /* ignore */ }
+  }
+}

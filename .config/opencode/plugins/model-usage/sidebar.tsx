@@ -2,13 +2,12 @@
 import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { EventMessageUpdated } from "@opencode-ai/sdk/v2"
 import { createSignal, createEffect, createMemo, onCleanup } from "solid-js"
-import type { CopilotConfig, CopilotQuotaInfo, GoQuotaInfo, MessagePart } from "./types"
+import type { CopilotQuotaInfo, GoQuotaInfo } from "./types"
 import {
   log as logFn,
   DEBUG,
-  isSupportedModel, calculateMessageMultiplier,
-  roundUsage, buildProgressBar, getUsageColor, getQuotaLabel,
-  formatDuration, isModelDeprecated,
+  isSupportedModel, buildProgressBar, getUsageColor, getQuotaLabel,
+  formatDuration,
   splitCost,
   logPath,
 } from "./helpers"
@@ -23,34 +22,6 @@ const MAX_POLL_ATTEMPTS = 30
 const PLUGIN_VERSION = "v41"
 
 log(`=== usage-sidebar ${PLUGIN_VERSION} loaded ===`)
-
-async function loadConfig(): Promise<CopilotConfig> {
-  const configPath = new URL("../model-usage.config.json", import.meta.url).pathname
-  log("loadConfig: trying path:", configPath)
-  try {
-    const configFile = Bun.file(configPath)
-    const exists = await configFile.exists()
-    log("loadConfig: file exists:", exists)
-    if (exists) {
-      const raw = await configFile.text()
-      const parsed = JSON.parse(raw) as Partial<CopilotConfig>
-      const cfg: CopilotConfig = {
-        modelMultipliers: parsed.modelMultipliers ?? {},
-        deprecated: parsed.deprecated ?? [],
-      }
-      log("loadConfig: loaded config:", JSON.stringify(cfg))
-      return cfg
-    }
-  } catch (err) {
-    log("loadConfig: error:", String(err))
-  }
-
-  log("loadConfig: using defaults")
-  return {
-    modelMultipliers: {},
-    deprecated: [],
-  }
-}
 
 function getActiveModel(api: TuiPluginApi, sessionID: string): string | null {
   try {
@@ -105,154 +76,30 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
   const githubToken = process.env.GITHUB_TOKEN ?? ""
   const hasToken = !!githubToken
 
-  const [config, setConfig] = createSignal<CopilotConfig>({ modelMultipliers: {}, deprecated: [] })
-  const [sessionUsage, setSessionUsage] = createSignal<number>(0)
   const [quotaInfo, setQuotaInfo] = createSignal<CopilotQuotaInfo | null>(null)
   const [quotaLoading, setQuotaLoading] = createSignal<boolean>(false)
   const [activeModel, setActiveModel] = createSignal<string | null>(null)
-  const [sessionLoading, setSessionLoading] = createSignal<boolean>(false)
   const [peakInputTokens, setPeakInputTokens] = createSignal<number>(0)
   const [totalOutputTokens, setTotalOutputTokens] = createSignal<number>(0)
   const [totalInputCost, setTotalInputCost] = createSignal<number>(0)
   const [totalOutputCost, setTotalOutputCost] = createSignal<number>(0)
-  const [configLoaded, setConfigLoaded] = createSignal<boolean>(false)
 
   const [goQuota, setGoQuota] = createSignal<GoQuotaInfo | null>(null)
   const [goQuotaLoading, setGoQuotaLoading] = createSignal(false)
 
-  const messageMultipliers = new Map<string, number>()
   // Maps messageID → last seen token snapshot for delta calculation (cost billing)
   const processedAssistantMessages = new Map<string, { input: number; cacheRead: number; output: number; cost: number }>()
   // Maps sessionID → peak context window (input + cacheRead) ever seen in that session (for ↑ display)
   const peakPerSession = new Map<string, number>()
   const trackedSessions = new Set<string>()
-  let loadedSessionID: string | null = null
   let loadedQuotaSessionID: string | null = null
   let loadedGoQuotaSessionID: string | null = null
   let loadedTokenRootSessionID: string | null = null
-  let tokenConfigSnapshot: CopilotConfig | null = null
   let tokenLoadGeneration = 0
   let loadedAllSessionsForRoot: string | null = null
   let lastQuotaFetchAt = 0  // timestamp of last event-driven fetchQuota call
 
-  // Load config once on mount
-  loadConfig().then((cfg) => { setConfig(cfg); setConfigLoaded(true) }).catch((err) => log("loadConfig failed:", String(err)))
-
-  async function fetchSessionUsage(sessionID: string) {
-    messageMultipliers.clear()
-    try {
-      log("fetchSessionUsage: fetching messages for session:", sessionID)
-      const result = await props.api.client.session.messages({
-        sessionID,
-        limit: 10000,
-      })
-      const rawResult = (result as any)?.data ?? result
-      const messages = Array.isArray(rawResult) ? rawResult : []
-      log("fetchSessionUsage: got", messages.length, "messages (raw type:", typeof (result as any)?.data, "isArray:", Array.isArray((result as any)?.data), ")")
-      if (messages.length > 0) {
-        log("fetchSessionUsage: first msg keys:", Object.keys(messages[0] as any).join(","), "id:", messages[0].id)
-        log("fetchSessionUsage: first msg info keys:", Object.keys(messages[0].info as any ?? {}).join(","), "info.id:", (messages[0].info as any)?.id)
-        log("fetchSessionUsage: first msg full info:", JSON.stringify(messages[0].info))
-      }
-
-      // Collect user messages — model is read directly from UserMessage.model (required field in
-      // OpenCode schema: z.object({ providerID, modelID, variant? }), never optional).
-      // api.client.session.messages() returns { info: Message, parts: Part[] }[] so parts are
-      // available directly without a separate api.state.part() call.
-      const userMsgs: { id: string; model: string | null; parts: MessagePart[] }[] = []
-      for (const item of messages) {
-        const msgId = item.id ?? (item.info as any)?.id ?? (item as any)?.messageID ?? (item as any)?.uid
-        log("fetchSessionUsage: checking msg id:", msgId, "role:", item.info?.role)
-        if (item.info?.role === "user" && msgId) {
-          // Skip messages from subagent sessions (compaction in a child session is a tool call, not a premium request)
-          if (item.info?.sessionID && item.info.sessionID !== sessionID) {
-            log("fetchSessionUsage: skipping subagent message", msgId, "sessionID:", item.info.sessionID)
-            continue
-          }
-          const parts = ((item as any).parts ?? []) as MessagePart[]
-          // Read model directly from UserMessage.model (providerID/modelID nested object)
-          const infoModel = (item.info as any)?.model
-          const model = infoModel?.providerID && infoModel?.modelID
-            ? `${infoModel.providerID}/${infoModel.modelID}` : null
-          log("fetchSessionUsage: user msg", msgId, "direct model:", model, "parts:", parts.length,
-            "partTypes:", parts.map((p: any) => p.type + (p.synthetic ? "[synthetic]" : "")).join(","))
-          userMsgs.push({ id: msgId, model, parts })
-        }
-      }
-      log("fetchSessionUsage: collected", userMsgs.length, "user messages")
-
-      // Pass 1: REVERSE scan — assign each assistant msg to the nearest preceding user msg
-      let uIdx = userMsgs.length - 1
-      for (let i = messages.length - 1; i >= 0 && uIdx >= 0; i--) {
-        const role = messages[i].info?.role
-        if (role === "user") {
-          uIdx--
-        } else if (role === "assistant" && uIdx >= 0 && !userMsgs[uIdx].model) {
-          const providerID = (messages[i].info as any).providerID
-          const modelID = (messages[i].info as any).modelID
-          if (providerID && modelID) {
-            userMsgs[uIdx].model = `${providerID}/${modelID}`
-          }
-        }
-      }
-
-      // Pass 2: for user msgs still without model, look ahead at next assistant AFTER them
-      let msgIdx = 0
-      for (const um of userMsgs) {
-        if (um.model) continue
-        // Find this user msg's position in the messages array
-        while (msgIdx < messages.length) {
-          if (messages[msgIdx].info?.role === "user" && messages[msgIdx].id === um.id) {
-            msgIdx++
-            break
-          }
-          msgIdx++
-        }
-        // Look ahead for next assistant
-        while (msgIdx < messages.length) {
-          const role = messages[msgIdx].info?.role
-          if (role === "assistant") {
-            const providerID = (messages[msgIdx].info as any).providerID
-            const modelID = (messages[msgIdx].info as any).modelID
-            if (providerID && modelID) {
-              um.model = `${providerID}/${modelID}`
-              break
-            }
-          }
-          msgIdx++
-        }
-      }
-
-      // Pass 3: Final fallback — assign active model to any user msg still without one.
-      // Handles the most recent user message (no assistant response yet) and any edge case
-      // where item.info.model is absent in the API response.
-      const fallbackModel = getActiveModel(props.api, sessionID)
-      if (fallbackModel) {
-        for (const um of userMsgs) {
-          if (!um.model) {
-            um.model = fallbackModel
-            log("fetchSessionUsage: pass3 fallback model for msg:", um.id, "model:", fallbackModel)
-          }
-        }
-      }
-
-      // Calculate total
-      const isFreePlan = quotaInfo()?.planType === "free"
-      let total = 0
-      for (const um of userMsgs) {
-        total += calculateMessageMultiplier(um.id, um.parts, um.model, isFreePlan, config(), messageMultipliers)
-      }
-
-      log("fetchSessionUsage: total usage:", total)
-      setSessionUsage(roundUsage(total))
-      loadedSessionID = sessionID
-    } catch (err) {
-      log("fetchSessionUsage error:", String(err))
-      setSessionUsage(0)
-    }
-  }
-
-  function resetTokenTracking(sessionID: string, cfg: CopilotConfig) {
+  function resetTokenTracking(sessionID: string) {
     tokenLoadGeneration++
     processedAssistantMessages.clear()
     peakPerSession.clear()
@@ -263,7 +110,6 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
     setTotalInputCost(0)
     setTotalOutputCost(0)
     loadedTokenRootSessionID = sessionID
-    tokenConfigSnapshot = cfg
   }
 
   // Track peak context size (input + cacheRead + output) per session.
@@ -283,7 +129,7 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
     }
   }
 
-  async function loadSessionTokens(sessionID: string, cfg: CopilotConfig) {
+  async function loadSessionTokens(sessionID: string) {
     const generation = tokenLoadGeneration
     try {
       const result = await props.api.client.session.messages({ sessionID, limit: 10000 })
@@ -334,15 +180,15 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
     }
   }
 
-  async function loadRelatedSessionTokens(sessionID: string, cfg: CopilotConfig) {
-    if (loadedTokenRootSessionID !== sessionID || tokenConfigSnapshot !== cfg) {
-      resetTokenTracking(sessionID, cfg)
+  async function loadRelatedSessionTokens(sessionID: string) {
+    if (loadedTokenRootSessionID !== sessionID) {
+      resetTokenTracking(sessionID)
     }
     const generation = tokenLoadGeneration
 
     if (!trackedSessions.has(sessionID)) {
       trackedSessions.add(sessionID)
-      loadSessionTokens(sessionID, cfg)
+      loadSessionTokens(sessionID)
     }
 
     const alreadyWalked = loadedAllSessionsForRoot === sessionID
@@ -361,7 +207,7 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
             if (!sid || trackedSessions.has(sid)) continue
             if (pid && trackedSessions.has(pid)) {
               trackedSessions.add(sid)
-              loadSessionTokens(sid, cfg)
+              loadSessionTokens(sid)
               changed = true
             }
           }
@@ -434,19 +280,13 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
   onCleanup(() => clearInterval(modelPoller))
 
   createEffect(() => {
-    if (!configLoaded()) return
     const sessionID = props.session_id
-    const cfg = config()
     if (!sessionID) {
       log("createEffect: no sessionID, skipping")
       return
     }
 
     // Determine if this is the root/primary session (no parentID) or a subagent session.
-    // Subagent "user" messages are coordinator instructions, not human requests — they must
-    // never trigger quota fetches or premium request counting. Default optimistic (true) so
-    // the first message in an unknown session still works; corrected below once the session
-    // list resolves.
     let isRootSession = true
     props.api.client.session.list({ limit: 200 })
       .then((result: any) => {
@@ -460,18 +300,13 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
 
     const model = currentModel()
     setActiveModel(model)
-    log("createEffect: sessionID:", sessionID, "model:", model, "loadedSessionID:", loadedSessionID, "isSupported:", model ? isSupportedModel(model) : false)
+    log("createEffect: sessionID:", sessionID, "model:", model, "isSupported:", model ? isSupportedModel(model) : false)
 
     if (model && isSupportedModel(model)) {
-      loadRelatedSessionTokens(sessionID, cfg) // works for both
+      loadRelatedSessionTokens(sessionID) // works for both
       if (model.toLowerCase().includes("copilot")) {
-        // Copilot: fetch session usage + quota
-        if (loadedSessionID !== sessionID) {
-          setSessionLoading(true)
-          fetchSessionUsage(sessionID).then(() => setSessionLoading(false))
-          fetchQuota()
-          loadedQuotaSessionID = sessionID
-        } else if (loadedQuotaSessionID !== sessionID) {
+        // Copilot: fetch quota on session change
+        if (loadedQuotaSessionID !== sessionID) {
           fetchQuota()
           loadedQuotaSessionID = sessionID
         }
@@ -484,9 +319,6 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
           fetchGoQuotaGuarded()
         }
       }
-    } else {
-      setSessionLoading(false)
-      if (loadedSessionID !== sessionID) setSessionUsage(0)
     }
 
     const unsubMessageAll = props.api.event.on("message.updated", (event: any) => {
@@ -495,51 +327,6 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
         const e = event as EventMessageUpdated
         const evtSID = e.properties?.sessionID ?? (event as any).properties?.sessionID
         const msg = e.properties?.info ?? (event as any).properties?.info
-
-        // --- Premium request counting (user messages, coordinator session only) ---
-        if (evtSID === sessionID_outer && msg?.role === "user") {
-          const msgId = msg?.id
-          if (msgId && !messageMultipliers.has(msgId)) {
-            // 1. Read model directly from UserMessage.model
-            const userModel = (msg as any)?.model
-            let lastModel: string | null = userModel?.providerID && userModel?.modelID
-              ? `${userModel.providerID}/${userModel.modelID}` : null
-
-            // 2. Fallback: scan last assistant message in session state
-            if (!lastModel) {
-              const msgs = props.api.state.session.messages(sessionID_outer)
-              let lastProviderID: string | undefined
-              let lastModelID: string | undefined
-              for (let i = msgs.length - 1; i >= 0; i--) {
-                if (msgs[i].role === "assistant") {
-                  lastProviderID = msgs[i].providerID
-                  lastModelID = msgs[i].modelID
-                  break
-                }
-              }
-              lastModel = lastProviderID && lastModelID ? `${lastProviderID}/${lastModelID}` : null
-            }
-
-            // 3. Final fallback: active model
-            if (!lastModel) lastModel = getActiveModel(props.api, sessionID_outer)
-
-            const parts = (props.api.state.part(msgId) ?? []) as MessagePart[]
-            if (parts.some((p) => p.type === "compaction")) {
-              log("message.updated: compaction message detected", msgId)
-            }
-            const isFreePlan = quotaInfo()?.planType === "free"
-            const multiplier = calculateMessageMultiplier(msgId, parts, lastModel, isFreePlan, config(), messageMultipliers)
-            if (multiplier > 0) {
-              setSessionUsage((prev) => roundUsage(prev + multiplier))
-              // Only fetch quota from the root/primary session. Subagent sessions generate
-              // many "user" messages (coordinator instructions) that would spam the GitHub API.
-              // Also throttle: heavy sessions can still send many root-level messages quickly.
-              if (isRootSession && Date.now() - lastQuotaFetchAt > QUOTA_EVENT_MIN_INTERVAL_MS) {
-                fetchQuota()
-              }
-            }
-          }
-        }
 
         // --- Token cost counting (assistant messages, all tracked sessions) ---
         if (trackedSessions.has(evtSID) && msg?.role === "assistant") {
@@ -580,7 +367,7 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
     const unsubCompacted = props.api.event.on("session.compacted", (evt) => {
       const evtSID = (evt as any).properties?.sessionID
 
-      // Premium requests: refresh quota only for root session compaction (unchanged behaviour)
+      // Refresh quota only for root session compaction
       if (evtSID === sessionID) {
         if (isRootSession && Date.now() - lastQuotaFetchAt > QUOTA_EVENT_MIN_INTERVAL_MS) {
           fetchQuota()
@@ -592,12 +379,11 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
 
       // Token costs: when any tracked session is compacted, the old assistant messages are
       // replaced by a compaction summary message. Counting both would double-count all tokens.
-      // Reset everything and re-fetch from the now-compacted state — same principle as how
-      // messageMultipliers deduplication keeps premium requests correct after compaction.
+      // Reset everything and re-fetch from the now-compacted state.
       if (evtSID && trackedSessions.has(evtSID)) {
         log("session.compacted: resetting token tracking due to compaction in session:", evtSID)
-        resetTokenTracking(sessionID, config())
-        loadRelatedSessionTokens(sessionID, config())
+        resetTokenTracking(sessionID)
+        loadRelatedSessionTokens(sessionID)
       }
     })
 
@@ -608,7 +394,7 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
       if (parentID && trackedSessions.has(parentID)) {
         log("session.created: new child session:", newSID, "parent:", parentID)
         trackedSessions.add(newSID)
-        loadSessionTokens(newSID, config())
+        loadSessionTokens(newSID)
       }
     })
 
@@ -628,7 +414,7 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
   const goRefreshInterval = setInterval(() => {
     if (currentModel()?.toLowerCase().includes("opencode-go")) {
       setGoQuotaLoading(true)
-        fetchGoQuotaGuarded()
+      fetchGoQuotaGuarded()
     }
   }, QUOTA_REFRESH_MS)
 
@@ -660,13 +446,6 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
     return "Usage"
   })
 
-  const isActiveModelDeprecated = createMemo(() => {
-    const model = currentModel()
-    if (!model) return false
-    const modelId = model.split("/").pop() ?? ""
-    return isModelDeprecated(modelId, config())
-  })
-
   const isCopilotActive = createMemo(() => currentModel()?.toLowerCase().includes("copilot") ?? false)
   const isOpenCodeGoActive = createMemo(() => currentModel()?.toLowerCase().includes("opencode-go") ?? false)
 
@@ -677,20 +456,7 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
       {isSupported() ? (
         <>
           <text fg={props.api.theme.current?.foreground ?? "#ffffff"}><strong>{providerLabel()}</strong></text>
-          {isCopilotActive() && !quotaInfo()?.tokenBasedBilling && (
-            <>
-              <text fg={props.api.theme.current?.muted ?? "#888888"}>Current Session</text>
-              {sessionLoading() && sessionUsage() === 0 ? (
-                <text fg={props.api.theme.current?.muted ?? "#888888"}>Loading...</text>
-              ) : (
-                <text fg="#ffffff">{sessionUsage().toFixed(2)} {quotaInfo()?.planType === "free" ? "chat requests" : "premium requests"}</text>
-              )}
-            </>
-          )}
           <text fg={props.api.theme.current?.muted ?? "#888888"}>Cost estimation</text>
-          {isActiveModelDeprecated() && (
-            <text fg="#ef4444">⚠ Model deprecated</text>
-          )}
           <text fg="#ffffff">{("↑ " + peakInputTokens().toLocaleString() + " tokens").padEnd(26) + "$" + totalInputCost().toFixed(2)}</text>
           <text fg="#ffffff">{("↓ " + totalOutputTokens().toLocaleString() + " tokens").padEnd(26) + "$" + totalOutputCost().toFixed(2)}</text>
           <text fg={props.api.theme.current?.foreground ?? "#ffffff"}>

@@ -1,5 +1,5 @@
 import { mkdirSync, appendFileSync } from "node:fs"
-import type { CopilotConfig, MessagePart } from "./types"
+import type { SystemFragment } from "./types"
 
 export const DEBUG = process.env.OPENCODE_COPILOT_DEBUG === "true"
 export const logsDir = new URL("../logs", import.meta.url).pathname
@@ -63,98 +63,12 @@ export function getUsageColor(percentage: number): string {
   return "#22c55e"
 }
 
-export function roundUsage(value: number): number {
-  let rounded = Math.round(value * 100) / 100
-  // Handle imprecise multiplier artifacts (0.33 ≈ 1/3):
-  // 2×0.33=0.65→0.67, 4×0.33=1.32→1.33, etc.
-  let cents = Math.round((rounded % 1) * 100)
-  if (cents > 0 && cents < 100 && cents % 33 === 32) {
-    rounded = Math.round((rounded + 0.01) * 100) / 100
-    cents = Math.round((rounded % 1) * 100)
-  }
-  // Handle .99 → round up (3×0.33=0.99→1.00)
-  if (cents === 99) {
-    return Math.ceil(rounded)
-  }
-  return rounded
-}
-
 // ─── Model helpers ────────────────────────────────────────────────────────────
-
-export function getModelId(modelName: string): string | null {
-  if (!modelName) return null
-  const parts = modelName.split("/")
-  if (parts.length < 2) return null
-  const provider = parts[0]
-  if (!provider.includes("copilot") && provider !== "opencode-go") return null
-  return parts.slice(1).join("/")
-}
-
-export function getMultiplier(modelName: string, config: CopilotConfig): number {
-  const modelId = getModelId(modelName)
-  if (!modelId) return 1.0
-  if (config.modelMultipliers[modelId] !== undefined) {
-    return config.modelMultipliers[modelId]
-  }
-  const normalized = modelId.toLowerCase()
-  for (const [key, value] of Object.entries(config.modelMultipliers)) {
-    if (key.toLowerCase() === normalized) return value
-  }
-  return 1.0
-}
-
-export function isModelDeprecated(modelId: string, config: CopilotConfig): boolean {
-  if (!modelId) return false
-  const normalized = modelId.toLowerCase()
-  return config.deprecated.some((d) => d.toLowerCase() === normalized)
-}
 
 export function isSupportedModel(modelName: string): boolean {
   if (!modelName) return false
   const lower = modelName.toLowerCase()
   return lower.includes("copilot") || lower.includes("opencode-go")
-}
-
-export function isSyntheticMessage(parts: MessagePart[]): boolean {
-  // Messages with a "compaction" type part are the real compaction request — always count them.
-  if (parts.some((p) => p.type === "compaction")) return false
-  // The synthetic *continuation* message (auto-created after compaction to resume the chat)
-  // has ONLY {type:"text", synthetic:true} parts and nothing else.
-  // Real user messages may also contain synthetic text parts (e.g. the first message in a
-  // session after context refill), but they always have at least one non-synthetic part too
-  // (e.g. a plain "text" part, a "file" part, etc.).
-  const syntheticTextParts = parts.filter((p) => p.type === "text" && p.synthetic === true)
-  if (syntheticTextParts.length === 0) return false
-  const nonSyntheticParts = parts.filter((p) => !(p.type === "text" && p.synthetic === true))
-  return nonSyntheticParts.length === 0
-}
-
-export function calculateMessageMultiplier(
-  msgId: string,
-  parts: MessagePart[],
-  model: string | null,
-  isFreePlan: boolean,
-  config: CopilotConfig,
-  messageMultipliers: Map<string, number>
-): number {
-  if (isSyntheticMessage(parts)) {
-    // Don't store in map — storing 0 would permanently blacklist the message ID,
-    // preventing any future retry if parts change (e.g. message.updated fires again).
-    log("calculateMessageMultiplier: skipping synthetic message", msgId)
-    return 0
-  }
-
-  if (!model || getModelId(model) === null) {
-    // Don't store in map — allows retry when the model becomes available on the next event fire.
-    log("calculateMessageMultiplier: no copilot model for", msgId, "model:", model)
-    return 0
-  }
-
-  const multiplier = isFreePlan ? 1.0 : getMultiplier(model, config)
-  log("calculateMessageMultiplier:", msgId, "model:", model, "multiplier:", multiplier)
-  // Only store positive results — the deduplication guard in message.updated checks this map.
-  messageMultipliers.set(msgId, multiplier)
-  return multiplier
 }
 
 // ─── Formatting helpers ───────────────────────────────────────────────────────
@@ -221,4 +135,189 @@ export function splitCost(
     inputCost: deltaCost * inputWeight / totalWeight,
     outputCost: deltaCost * outputWeight / totalWeight,
   }
+}
+
+// ─── Token estimation ─────────────────────────────────────────────────────────
+
+export function estimateTokens(text: string): number {
+  if (!text || text.length === 0) return 0
+  return Math.ceil(text.length / 4)
+}
+
+/**
+ * Reconstitute the RAW prompt token count (system + user + tools + cached) from
+ * the adjusted values OpenCode stores on assistant messages.
+ *
+ * OpenCode's `session.ts:366` computes `tokens.input = raw - cacheRead - cacheWrite`
+ * (non-cached input). To recover the full prompt size we must ADD both cache
+ * counters back. This is provider-agnostic: works for opencode-go (no caching),
+ * Anthropic (cache.write on first call), Bedrock, OpenAI/Copilot (cache.read on
+ * resumed calls).
+ */
+export function rawPromptTokens(tokens: {
+  input?: number
+  cache?: { read?: number; write?: number }
+}): number {
+  const input = Math.max(0, tokens.input ?? 0)
+  const cacheRead = Math.max(0, tokens.cache?.read ?? 0)
+  const cacheWrite = Math.max(0, tokens.cache?.write ?? 0)
+  return input + cacheRead + cacheWrite
+}
+
+/**
+ * Scale a list of entries so their token sum matches `targetTotal`.
+ * Mirrors the reference plugin's approach: `factor = target / sum`, apply to
+ * each entry, push the rounding remainder onto the first entry so the sum is
+ * exact. Returns a NEW array (does not mutate input).
+ *
+ * If `targetTotal <= 0`, all entries become 0. If `measuredSum <= 0` but
+ * `targetTotal > 0`, the target is split evenly across entries.
+ */
+export function scaleEntries<T extends { tokens: number }>(entries: readonly T[], targetTotal: number): T[] {
+  if (entries.length === 0) return []
+  const out = entries.map((e) => ({ ...e }))
+
+  if (targetTotal <= 0) {
+    for (const e of out) e.tokens = 0
+    return out
+  }
+
+  const measuredSum = out.reduce((s, e) => s + e.tokens, 0)
+  if (measuredSum <= 0) {
+    const share = Math.round(targetTotal / out.length)
+    for (let i = 0; i < out.length; i++) {
+      out[i].tokens = i === 0
+        ? Math.max(0, Math.round(targetTotal) - share * (out.length - 1))
+        : share
+    }
+    return out
+  }
+
+  const factor = targetTotal / measuredSum
+  let accumulated = 0
+  for (const e of out) {
+    e.tokens = Math.max(0, Math.round(e.tokens * factor))
+    accumulated += e.tokens
+  }
+  // Push the rounding remainder onto the first entry so the sum is exact.
+  const diff = Math.round(targetTotal) - accumulated
+  if (diff !== 0) {
+    out[0].tokens = Math.max(0, out[0].tokens + diff)
+  }
+  return out
+}
+
+/**
+ * Split an assembled system prompt into labelled fragments by markdown header,
+ * jungle-mode `Instructions from:` markers, and XML-like section blocks
+ * (`<available_references>`, `<mcp_instructions>`, `<available_skills>`).
+ * Each fragment's tokens are estimated with char/4.  Pure / testable.
+ */
+export function splitSystemFragments(systemText: string, maxFragments = 100): SystemFragment[] {
+  if (!systemText || systemText.trim().length === 0) return []
+  const lines = systemText.split("\n")
+  const buckets: { label: string; text: string }[] = []
+  let current: { label: string; text: string } | null = null
+  let xmlMode = false
+  let xmlCloseTag = ""
+  let pluginMode = false
+  let pluginBlankCount = 0
+
+  // Top-level XML sections in the assembled system prompt (system.ts,
+  // skill.ts). Only these three tags start a new fragment; inner tags
+  // like <example>, <server>, <reference>, <skill> are content.
+  const sectionOpen = /^<(available_references|mcp_instructions|available_skills)>/
+  const friendlyLabel: Record<string, string> = {
+    available_references: "References",
+    mcp_instructions: "MCP Instructions",
+    available_skills: "Skills",
+  }
+
+  const push = () => {
+    if (current && current.text.trim().length > 0) buckets.push(current)
+    current = null
+  }
+
+  for (const line of lines) {
+    // Inside a multi-line XML block: collect until the closing tag.
+    if (xmlMode) {
+      current!.text += line + "\n"
+      if (line.includes(xmlCloseTag)) {
+        push()
+        xmlMode = false
+      }
+      continue
+    }
+
+    // Inside a plugin-injected section (e.g. jungle-mode persona):
+    // collect everything until two consecutive blank lines — the
+    // boundary between the plugin section and the original system prompt.
+    // Headers within this section (like `## 🍌 JUNGLE MODE ACTIVE 🍌`)
+    // are content, not separate fragments.
+    if (pluginMode) {
+      current!.text += line + "\n"
+      if (line.trim().length === 0) {
+        pluginBlankCount++
+        if (pluginBlankCount >= 2) {
+          push()
+          pluginMode = false
+        }
+      } else {
+        pluginBlankCount = 0
+      }
+      continue
+    }
+
+    // XML block start (section-level only).
+    const xmlMatch = sectionOpen.exec(line)
+    if (xmlMatch) {
+      const tag = xmlMatch[1]
+      push()
+      current = { label: friendlyLabel[tag] ?? tag.replace(/_/g, " "), text: line + "\n" }
+      xmlCloseTag = `</${tag}>`
+      if (line.includes(xmlCloseTag)) {
+        push()
+      } else {
+        xmlMode = true
+      }
+      continue
+    }
+
+    const header = /^(#{1,3})\s+(.+)$/.exec(line)
+    const jungle = /^Instructions from:\s*(.+)$/.exec(line)
+    if (header) {
+      push()
+      current = { label: header[2].trim().slice(0, 48), text: line + "\n" }
+    } else if (jungle) {
+      push()
+      current = { label: jungle[1].trim().slice(0, 48), text: line + "\n" }
+      // Only enter plugin mode for jungle-mode injections (collect until
+      // double blank line). Other Instructions from: lines (e.g. AGENTS.md
+      // file references) are regular section headers — don't swallow their
+      // content into plugin mode.
+      if (/^jungle-mode\//.test(jungle[1].trim())) {
+        pluginMode = true
+        pluginBlankCount = 0
+      }
+    } else if (current) {
+      current.text += line + "\n"
+    } else {
+      // Preamble before any header — bucket as "preamble".
+      current = { label: "preamble", text: line + "\n" }
+    }
+  }
+  push()
+
+  const frags: SystemFragment[] = buckets.map((b) => ({
+    label: b.label || "section",
+    tokens: estimateTokens(b.text),
+  }))
+
+  if (frags.length <= maxFragments) return frags.sort((a, b) => b.tokens - a.tokens)
+
+  const sorted = frags.sort((a, b) => b.tokens - a.tokens)
+  const kept = sorted.slice(0, maxFragments)
+  const otherTotal = sorted.slice(maxFragments).reduce((s, f) => s + f.tokens, 0)
+  if (otherTotal > 0) kept.push({ label: "other", tokens: otherTotal })
+  return kept
 }
