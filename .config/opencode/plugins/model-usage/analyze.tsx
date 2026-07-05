@@ -805,7 +805,7 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                   const isSys = list[idx]?.id === "system"
                   return (
                     <text fg={muted}>
-                      ← → tabs  ·  ↑↓ scroll{isSys ? "  ·  v raw" : ""}  ·  r reload  ·  auto ↻60s
+                      ← → tabs  ·  ↑↓ scroll{isSys ? "  ·  v raw" : ""}  ·  r reload
                     </text>
                   )
                 })()}
