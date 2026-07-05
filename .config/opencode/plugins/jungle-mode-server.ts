@@ -18,8 +18,22 @@ async function isJungleEnabled(): Promise<boolean> {
   }
 }
 
-function detectCoordinatorInSystem(system: string[]): boolean {
-  return system.join("\n").includes("Lead Coordinator Agent")
+/**
+ * Detect the primary agent name from the assembled system content.
+ * Reliable even when `chat.message` fires after `system.transform`
+ * (hook-ordering race on the first call of a session).
+ *
+ * - Coordinator: the system contains "Lead Coordinator Agent"
+ * - Plan/Build:   the system starts with "You are opencode" (the standard
+ *                 OpenCode preamble) but has NO "Lead Coordinator Agent"
+ * - Subagents:    none of the above — return undefined so we don't inject
+ *                 a primary-agent persona into subagent calls
+ */
+function detectPrimaryAgent(system: string[]): string | undefined {
+  const text = system.join("\n")
+  if (text.includes("Lead Coordinator Agent")) return "coordinator"
+  if (text.startsWith("You are opencode, an interactive CLI tool")) return "plan"
+  return undefined
 }
 
 export const JungleModePlugin = async () => {
@@ -31,30 +45,34 @@ export const JungleModePlugin = async () => {
       const enabled = await isJungleEnabled()
       if (!enabled) return
 
-      // Primary path: Map bridge (plan/build/coordinator)
-      const agent = _input.sessionID ? sessionAgent.get(_input.sessionID) : undefined
-      if (agent) {
-        // Skip title generator — it fires first and would steal the persona from the real agent
-        if (output.system.join("\n").includes("You are a title generator")) return
-        sessionAgent.delete(_input.sessionID)
-        if (injectedSessions.has(_input.sessionID + ":" + agent)) return
-        const persona = getPersonaForAgent(agent)
-        if (persona) {
-          injectedSessions.add(_input.sessionID + ":" + agent)
-          output.system[0] = "Instructions from: jungle-mode/primary-agent-persona\n" + persona + "\n\n" + output.system[0]
-        }
-        return
+      // Skip title generator — it fires first and would steal the persona from the real agent
+      if (output.system.join("\n").includes("You are a title generator")) return
+
+      // Per-call guard: if the persona is already in the system array, this
+      // hook fired twice on the same call (or another plugin re-injected).
+      // Bail to avoid duplication. The system array is FRESH on every API
+      // call, so we DO want to inject on every call — the persona must be
+      // persistent, not one-time.
+      const JUNGLE_MARKER = "Instructions from: jungle-mode/primary-agent-persona"
+      if (output.system.join("\n").includes(JUNGLE_MARKER)) return
+
+      // Reliable agent detection, ordered by priority:
+      // 1. sessionAgent bridge — set by `chat.message` hook (most accurate).
+      //    We do NOT delete after use — it persists so subsequent
+      //    `system.transform` calls for the same session always find the
+      //    agent even when `chat.message` doesn't re-fire.
+      // 2. System content — detects coordinator vs plan/build from the
+      //    assembled system text.  Works on the very first call before
+      //    `chat.message` runs (hook-ordering race).
+      let agent = _input.sessionID ? sessionAgent.get(_input.sessionID) : undefined
+      if (!agent) {
+        agent = detectPrimaryAgent(output.system)
       }
 
-      // Fallback: original string matching for coordinator
-      if (!detectCoordinatorInSystem(output.system)) return
-      if (_input.sessionID && injectedSessions.has(_input.sessionID)) return
-
-      const persona = getPersonaForAgent("coordinator")
-      if (!persona) return
-
-      if (_input.sessionID) injectedSessions.add(_input.sessionID)
-      output.system[0] = "Instructions from: jungle-mode/primary-agent-persona\n" + persona + "\n\n" + output.system[0]
+      const persona = getPersonaForAgent(agent)
+      if (persona) {
+        output.system[0] = JUNGLE_MARKER + "\n" + persona + "\n\n" + output.system[0]
+      }
     },
 
     "chat.message": async (

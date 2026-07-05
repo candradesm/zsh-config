@@ -134,10 +134,11 @@ export function registerUsageCommand(api: TuiPluginApi) {
             const { startMs, endMs } = computeMonth()
             const isCurrent = isCurrentMonth(startMs)
 
-            // Past month: use cache always, no refresh
+            // Past month: only trust cache if written after month ended (complete data)
             if (!isCurrent) {
               const cached = getCached(startMs)
-              if (cached) {
+              if (cached && cached.cachedAt >= endMs) {
+                // Cache was written after the month ended — data is complete, use it
                 const data = cached.result
                 if ("error" in data) {
                   setErrorMsg(data.error)
@@ -148,6 +149,11 @@ export function registerUsageCommand(api: TuiPluginApi) {
                 if (!hasLoadedOnce()) setHasLoadedOnce(true)
                 return
               }
+              // Cache is stale (cachedAt < endMs) or missing — show stale cache as placeholder if available
+              if (cached && !("error" in cached.result)) {
+                setViewState(cached.result as UsageData)
+              }
+              // fall through to refetch
             }
 
             // Current month: check cache freshness unless forced refresh
@@ -300,8 +306,9 @@ export function registerUsageCommand(api: TuiPluginApi) {
                   if (m < 0) { m = 11; y-- }
                   const startMs = Date.UTC(y, m, 1)
                   if (startMs < minPrefetchMs) break
-                  if (getCached(startMs)) { m--; continue }
                   const endMs = Date.UTC(y, m + 1, 1)
+                  const existingCache = getCached(startMs)
+                  if (existingCache && existingCache.cachedAt >= endMs) { m--; continue }
                   const result = queryUsage(dbPath, startMs, endMs)
                   setCached(startMs, { result, month: startMs, cachedAt: Date.now() })
                   // Stop if no data this far back

@@ -116,7 +116,6 @@ export async function fetchQuotaInfo(token: string): Promise<CopilotQuotaInfo | 
         unlimited: snapshot.unlimited ?? false,
         planType: "paid",
         quotaType: (data?.quota_snapshots?.premium_models || snapshot.token_based_billing || data?.token_based_billing) ? "ai_credits" : "premium",
-        tokenBasedBilling: !!(snapshot.token_based_billing || data?.token_based_billing),
       }
     }
 
@@ -135,7 +134,6 @@ export async function fetchQuotaInfo(token: string): Promise<CopilotQuotaInfo | 
         unlimited: false,
         planType: "free",
         quotaType: "premium",
-        tokenBasedBilling: false,
       }
     }
 
