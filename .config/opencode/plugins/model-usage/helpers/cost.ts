@@ -44,3 +44,13 @@ export function splitCost(
     outputCost: deltaCost * outputWeight / totalWeight,
   }
 }
+
+export function getCacheReadPrice(modelId: string, provider: readonly Provider[]): number {
+  for (const p of provider) {
+    const model = p.models?.[modelId]
+    if (model?.cost) {
+      return model.cost.cache?.read ?? 0
+    }
+  }
+  return 0
+}

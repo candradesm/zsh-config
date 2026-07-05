@@ -111,7 +111,7 @@ describe("splitSystemFragments", () => {
   })
 
   it("splits on jungle-mode 'Instructions from:' marker", () => {
-    const text = "Instructions from: jungle-mode/persona\npersona text\n# Env\nenv body"
+    const text = "Instructions from: jungle-mode/persona\npersona text\n\n\n# Env\nenv body"
     const frags = splitSystemFragments(text)
     expect(frags.some((f) => f.label === "jungle-mode/persona")).toBe(true)
     expect(frags.some((f) => f.label === "Env")).toBe(true)

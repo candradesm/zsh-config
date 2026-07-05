@@ -17,6 +17,7 @@ export function rawPromptTokens(tokens: {
   input?: number
   cache?: { read?: number; write?: number }
 }): number {
+  if (!tokens) return 0
   const input = Math.max(0, tokens.input ?? 0)
   const cacheRead = Math.max(0, tokens.cache?.read ?? 0)
   const cacheWrite = Math.max(0, tokens.cache?.write ?? 0)
