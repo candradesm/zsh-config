@@ -4,9 +4,12 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs"
 import { homedir } from "node:os"
 
 import { onMount, onCleanup, createSignal } from "solid-js"
-import { getMonthInfo, isCurrentMonth, fmt, fmtCost, buildBar } from "./helpers"
+import { getMonthInfo, isCurrentMonth } from "./helpers/dates"
+import { fmt, fmtCost, buildBar } from "./helpers/format"
 import type { UsageData } from "./types"
 import { queryUsage, getEarliestUsageDate } from "./db"
+import { makeScrollState } from "./shared/scroll"
+import { registerDialogKeyLayer } from "./shared/keys"
 
 // ─── Persistent multi-month cache ─────────────────────────────────────────
 const CACHE_DIR = `${homedir()}/.config/opencode/plugins/model-usage`
@@ -114,9 +117,7 @@ export function registerUsageCommand(api: TuiPluginApi) {
 
           // ── State ────────────────────────────────────────────────────────
           const [monthOffset, setMonthOffset] = createSignal(0)
-          let scrollRef: any = null
-          const [isScrolled, setIsScrolled] = createSignal(false)
-          const [isAtBottom, setIsAtBottom] = createSignal(false)
+          const scroll = makeScrollState(createSignal)
 
           const computeMonth = () => {
             const m = now.getUTCMonth() + monthOffset()
@@ -195,22 +196,20 @@ export function registerUsageCommand(api: TuiPluginApi) {
           }
 
           // ── Handle key presses ──────────────────────────────────────────
-          let dialogKeyLayer: any = null
+          let cleanupKeyLayer: (() => void) | null = null
 
           function handleKey(key: string) {
             if (key === "left" || key === "h") {
               if (monthOffset() <= minMonthOffset) return true  // hard cap: no older months available
               setMonthOffset(p => p - 1)
-              setIsScrolled(false)
-              setIsAtBottom(false)
+              scroll.scrollToTop()
               setTimeout(() => loadMonth(), 10)
               return true
             }
             if (key === "right" || key === "l") {
               if (monthOffset() >= 0) return true  // already at current month, don't go past
               setMonthOffset(p => p + 1)
-              setIsScrolled(false)
-              setIsAtBottom(false)
+              scroll.scrollToTop()
               setTimeout(() => loadMonth(), 10)
               return true
             }
@@ -224,30 +223,15 @@ export function registerUsageCommand(api: TuiPluginApi) {
             if (key === "t") {
               if (monthOffset() === 0) return true  // already at current month
               setMonthOffset(0)
-              setIsScrolled(false)
-              setIsAtBottom(false)
+              scroll.scrollToTop()
               setTimeout(() => loadMonth(), 10)
               return true
             }
             if (key === "up") {
-              scrollRef?.scrollBy?.(-10)
-              setIsAtBottom(false)
-              setTimeout(() => {
-                const top = scrollRef?.scrollTop ?? 0
-                if (top <= 0) setIsScrolled(false)
-              }, 50)
-              return true
+              return scroll.handleUp()
             }
             if (key === "down") {
-              scrollRef?.scrollBy?.(10)
-              setIsScrolled(true)
-              setTimeout(() => {
-                const st = scrollRef?.scrollTop ?? 0
-                const ch = scrollRef?.clientHeight ?? scrollRef?.height ?? 40
-                const sh = scrollRef?.scrollHeight ?? 0
-                setIsAtBottom(st + ch >= sh - 5)
-              }, 50)
-              return true
+              return scroll.handleDown()
             }
             return false
           }
@@ -269,7 +253,7 @@ export function registerUsageCommand(api: TuiPluginApi) {
             onMount(() => {
               api.ui.dialog.setSize("large")
               // Register dialog key layer
-              dialogKeyLayer = api.keymap.registerLayer({
+              cleanupKeyLayer = registerDialogKeyLayer(api, {
                 bindings: [
                   { key: "left",  cmd: "usage.navLeft",  desc: "Previous month" },
                   { key: "h",     cmd: "usage.navLeft",  desc: "Previous month" },
@@ -283,12 +267,12 @@ export function registerUsageCommand(api: TuiPluginApi) {
                   { key: "j",    cmd: "usage.scrollDown", desc: "Scroll down" },
                 ],
                 commands: [
-                  { name: "usage.navLeft",   title: "Previous Month", async run() { handleKey("left") } },
-                  { name: "usage.navRight",  title: "Next Month",     async run() { handleKey("right") } },
-                  { name: "usage.reload",    title: "Reload Usage",   async run() { handleKey("r") } },
-                  { name: "usage.today",    title: "Today",        async run() { handleKey("t") } },
-                  { name: "usage.scrollUp",   title: "Scroll Up",   async run() { handleKey("up") } },
-                  { name: "usage.scrollDown", title: "Scroll Down", async run() { handleKey("down") } },
+                  { name: "usage.navLeft",   title: "Previous Month", run: async () => { handleKey("left") } },
+                  { name: "usage.navRight",  title: "Next Month",     run: async () => { handleKey("right") } },
+                  { name: "usage.reload",    title: "Reload Usage",   run: async () => { handleKey("r") } },
+                  { name: "usage.today",    title: "Today",        run: async () => { handleKey("t") } },
+                  { name: "usage.scrollUp",   title: "Scroll Up",   run: async () => { handleKey("up") } },
+                  { name: "usage.scrollDown", title: "Scroll Down", run: async () => { handleKey("down") } },
                 ],
               })
               // Initial load
@@ -318,9 +302,9 @@ export function registerUsageCommand(api: TuiPluginApi) {
               }, 500)
             })
             onCleanup(() => {
-              if (dialogKeyLayer) {
-                try { dialogKeyLayer() } catch { /* ignore */ }
-                dialogKeyLayer = null
+              if (cleanupKeyLayer) {
+                try { cleanupKeyLayer() } catch { /* ignore */ }
+                cleanupKeyLayer = null
               }
             })
 
@@ -337,10 +321,10 @@ export function registerUsageCommand(api: TuiPluginApi) {
                   const data = viewState()
                   const hasOverflow = data && typeof data === "object" && !("error" in data) && data.models.length > 5
                   return (
-                    <text fg={muted}>{hasOverflow && isScrolled() ? "▲ more above" : " "}</text>
+                    <text fg={muted}>{hasOverflow && scroll.isScrolled() ? "▲ more above" : " "}</text>
                   )
                 })()}
-                <scrollbox ref={scrollRef} flexDirection="column" gap={1} maxHeight={40} scrollbarOptions={{ visible: false }}>
+                <scrollbox ref={(el) => scroll.scrollRef = el} flexDirection="column" gap={1} maxHeight={40} scrollbarOptions={{ visible: false }}>
                   {viewState() === "loading" ? (
                     <text fg={muted}>Loading usage data…</text>
                   ) : viewState() === "error" ? (
@@ -388,7 +372,7 @@ export function registerUsageCommand(api: TuiPluginApi) {
                   const data = viewState()
                   const hasOverflow = data && typeof data === "object" && !("error" in data) && data.models.length > 5
                   return (
-                    <text fg={muted}>{hasOverflow && !isAtBottom() ? "▼ more below" : " "}</text>
+                    <text fg={muted}>{hasOverflow && !scroll.isAtBottom() ? "▼ more below" : " "}</text>
                   )
                 })()}
                 {hasLoadedOnce() && (

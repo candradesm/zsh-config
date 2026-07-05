@@ -1,6 +1,8 @@
 import { homedir } from "node:os"
 import { mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs"
-import { estimateTokens, splitSystemFragments } from "./model-usage/helpers"
+import type { Model } from "@opencode-ai/sdk/v2"
+import { estimateTokens } from "./model-usage/helpers/tokens"
+import { splitSystemFragments } from "./model-usage/helpers/fragments"
 import type { SystemSnapshot } from "./model-usage/types"
 
 const TOKENS_DIR = `${homedir()}/.config/opencode/plugins/model-usage`
@@ -55,6 +57,32 @@ function isTitleGenerator(system: string[]): boolean {
   return system.join("\n").toLowerCase().includes("title generator")
 }
 
+/**
+ * Server plugin that captures the fully-assembled system prompt on every
+ * main-chat call via `experimental.chat.system.transform`.
+ *
+ * ## Cache coherency
+ *
+ * - **In-memory cache (`Map<sessionID, SystemSnapshot>`):** loaded from disk
+ *   at startup, updated on every measurement. Serves as write-through cache.
+ * - **Disk (`system-tokens.json`):** source of truth, read/written sync.
+ *   Every cache update flushes to disk atomically.
+ * - **Write serialization:** `writeQueue` promise chain prevents concurrent
+ *   writes from subagent API calls racing on the same file.
+ * - **Stale-load guard:** not needed here — writes are serialized and this
+ *   hook fires sequentially per session (API calls are serial within a
+ *   session). The `Promise<void>` chain handles it.
+ * - **Drift threshold (32 tokens):** avoids re-writing when the system prompt
+ *   hasn't materially changed (e.g. identical system on a cached re-fire).
+ *   Only the timestamp is refreshed (every 5 min).
+ * - **Compaction detection:** if new tokens < 70% of previous, treat as
+ *   post-compaction replacement and overwrite with the smaller measurement.
+ * - **Title-generator skip:** `isTitleGenerator()` prevents the tiny
+ *   title-only system prompt from polluting the stored measurement.
+ * - **Purge:** FIFO eviction — cap 1000 entries, evict 100 oldest by `ts`.
+ * - **Backfill:** entries captured before `rawText`/`fragments` were stored
+ *   get backfilled on the next matching call with no material token drift.
+ */
 export const ModelUsageServerPlugin = async () => {
   // In-memory cache (disk is source of truth). We deliberately do NOT freeze
   // sessions: the system can grow mid-session (new refs/MCP/skills) and we want
@@ -65,7 +93,7 @@ export const ModelUsageServerPlugin = async () => {
 
   return {
     "experimental.chat.system.transform": async (
-      _input: { sessionID?: string; model: any },
+      _input: { sessionID?: string; model: Model },
       output: { system: string[] },
     ) => {
       const sessionID = _input.sessionID
