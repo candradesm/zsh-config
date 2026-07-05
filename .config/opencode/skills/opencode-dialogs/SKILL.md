@@ -76,48 +76,53 @@ Every dialog uses this outer structure. See `examples/dialog-shell.tsx` for the 
 
 ### Scroll state tracking
 
+Use `createScrollState()` from `model-usage/shared/scroll.ts`. Import:
+
+```typescript
+import { createScrollState } from "./shared/scroll"
+```
+
 ```tsx
-let scrollRef: any = null
-const [isScrolled, setIsScrolled] = createSignal(false)
-const [isAtBottom, setIsAtBottom] = createSignal(false)
+const scroll = createScrollState()
 
 function handleKey(key: string) {
-  if (key === "up") {
-    scrollRef?.scrollBy?.(-10)
-    setIsAtBottom(false)
-    setTimeout(() => {
-      if ((scrollRef?.scrollTop ?? 0) <= 0) setIsScrolled(false)
-    }, 50)
-    return true
-  }
-  if (key === "down") {
-    scrollRef?.scrollBy?.(10)
-    setIsScrolled(true)
-    setTimeout(() => {
-      const st = scrollRef?.scrollTop ?? 0
-      const ch = scrollRef?.clientHeight ?? scrollRef?.height ?? 40
-      const sh = scrollRef?.scrollHeight ?? 0
-      setIsAtBottom(st + ch >= sh - 5)
-    }, 50)
-    return true
-  }
+  if (key === "up") return scroll.handleUp()
+  if (key === "down") return scroll.handleDown()
   return false
 }
 ```
+
+The factory returns:
+| Property | Type | Description |
+|---|---|---|
+| `scrollRef` | getter/setter | Attach to scrollbox via `ref={(el) => scroll.scrollRef = el}` |
+| `isScrolled()` | `() => boolean` | Whether scrolled away from top |
+| `isAtBottom()` | `() => boolean` | Whether scrolled to bottom |
+| `hasOverflow()` | `() => boolean` | Whether content overflows viewport |
+| `handleUp()` | `() => boolean` | Scrolls up 10px, updates signals, returns true |
+| `handleDown()` | `() => boolean` | Scrolls down 10px, updates signals, returns true |
+| `checkOverflow()` | `() => void` | Recalculates overflow after content changes |
+| `scrollToTop()` | `() => void` | Resets scroll to top, clears scroll signals |
 
 ---
 
 ## Dialog Key Layer
 
+Use `registerDialogKeyLayer()` from `model-usage/shared/keys.ts`. Import:
+
+```typescript
+import { registerDialogKeyLayer } from "./shared/keys"
+```
+
 Register inside `onMount`, clean up in `onCleanup`:
 
 ```tsx
-let dialogKeyLayer: any = null
+let cleanupKeyLayer: (() => void) | null = null
 
 onMount(() => {
   api.ui.dialog.setSize("large")
 
-  dialogKeyLayer = api.keymap.registerLayer({
+  cleanupKeyLayer = registerDialogKeyLayer(api, {
     bindings: [
       { key: "up",   cmd: "xxx.scrollUp",   desc: "Scroll up" },
       { key: "k",    cmd: "xxx.scrollUp",   desc: "Scroll up" },
@@ -125,8 +130,8 @@ onMount(() => {
       { key: "j",    cmd: "xxx.scrollDown", desc: "Scroll down" },
     ],
     commands: [
-      { name: "xxx.scrollUp",   title: "Scroll Up",   async run() { handleKey("up") } },
-      { name: "xxx.scrollDown", title: "Scroll Down", async run() { handleKey("down") } },
+      { name: "xxx.scrollUp",   title: "Scroll Up",   run: async () => { handleKey("up") } },
+      { name: "xxx.scrollDown", title: "Scroll Down", run: async () => { handleKey("down") } },
     ],
   })
 
@@ -134,12 +139,17 @@ onMount(() => {
 })
 
 onCleanup(() => {
-  if (dialogKeyLayer) {
-    try { dialogKeyLayer() } catch { /* ignore */ }
-    dialogKeyLayer = null
+  if (cleanupKeyLayer) {
+    try { cleanupKeyLayer() } catch { /* ignore */ }
+    cleanupKeyLayer = null
   }
 })
 ```
+
+The `registerDialogKeyLayer(api, config)` function:
+- Takes `{ bindings, commands }` config — same shape as `api.keymap.registerLayer`
+- Returns a cleanup function directly (no need to call the returned value)
+- Type-safe: `cleanupKeyLayer` is `(() => void) | null` instead of `any`
 
 - Binding namespaced to the dialog: `xxx.scrollUp`, `xxx.scrollDown`
 - Always use `try/catch` on cleanup — the layer may already be disposed
@@ -155,6 +165,38 @@ If the dialog has left/right navigation in addition to scroll, add those binding
 { key: "right", cmd: "xxx.navRight", desc: "Next" },
 { key: "l",     cmd: "xxx.navRight", desc: "Next" },
 ```
+
+---
+
+## Stale-load Guard
+
+Use `createLoadGuard()` from `model-usage/shared/reload.ts` to prevent superseded async fetches from overwriting newer data. Import:
+
+```typescript
+import { createLoadGuard } from "./shared/reload"
+```
+
+```tsx
+const loadGuard = createLoadGuard()
+
+async function loadData() {
+  const gen = loadGuard.invalidate() // increments generation, returns new number
+  // ... fetch data ...
+  if (!loadGuard.isCurrent(gen)) return // discard — newer fetch superseded this one
+  // ... update state ...
+}
+
+function reload() {
+  loadGuard.invalidate() // invalidate current generation before starting fresh fetch
+  loadData()
+}
+```
+
+The factory returns:
+| Method | Description |
+|---|---|
+| `invalidate(): number` | Increments generation, returns new number. Call before each fetch. |
+| `isCurrent(gen: number): boolean` | Returns true if `gen` is still the latest generation. Use to check after async fetch. |
 
 ---
 
@@ -281,7 +323,7 @@ const red = theme?.red ?? "#ef4444"
 
 | Property | Value |
 |---|---|
-| Function | `buildBar(percentage, 50)` from `helpers.ts` |
+| Function | `buildBar(percentage, 50)` from `model-usage/helpers/format.ts` |
 | Width | 50 characters |
 | Filled char | `\u2588` (full block) |
 | Empty char | `\u2591` (light shade) |
@@ -294,6 +336,10 @@ Each bar is proportional to the entry's percentage of the **total** (not relativ
 
 ## References
 - `model-usage/command.tsx` — reference: navigation + scroll dialog (`/usage`)
-- `model-usage/analyze.tsx` — reference: scroll-only dialog (`/analyze`)
-- `model-usage/helpers.ts` — shared utilities (`buildBar`, `fmt`)
+- `model-usage/analyze.tsx` — reference: tabbed dialog with scroll, tabs, and reload (`/analyze`)
+- `model-usage/helpers/format.ts` — shared utilities (`buildBar`, `fmt`, `buildProgressBar`, `getUsageColor`, `formatDuration`, `getQuotaLabel`)
+- `model-usage/helpers/debug.ts` — debug logging (`DEBUG`, `log`)
+- `model-usage/shared/scroll.ts` — `createScrollState()` factory for scroll signals + handlers
+- `model-usage/shared/keys.ts` — `registerDialogKeyLayer()` factory for dialog-scoped key bindings
+- `model-usage/shared/reload.ts` — `createLoadGuard()` factory for stale-fetch prevention
 - `opencode-plugin` skill — OpenCode plugin API patterns

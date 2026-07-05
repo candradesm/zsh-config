@@ -3,16 +3,23 @@ import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
 import { onMount, onCleanup, createSignal, createMemo } from "solid-js"
 import { existsSync, readFileSync } from "node:fs"
 import { homedir } from "node:os"
-import {
-  buildBar,
-  estimateTokens,
-  fmt,
-  log,
-  rawPromptTokens,
-  scaleEntries,
-} from "./helpers"
+import { log } from "./helpers/debug"
+import { estimateTokens, rawPromptTokens, scaleEntries } from "./helpers/tokens"
+import { buildBar, fmt } from "./helpers/format"
 import { loadBaseline } from "./db"
 import type { SystemFragment, SystemSnapshot, SystemSource } from "./types"
+import { makeScrollState } from "./shared/scroll"
+import { registerDialogKeyLayer } from "./shared/keys"
+import { createLoadGuard } from "./shared/reload"
+import type { AssistantMessage, Message, Part, SessionMessagesResponse } from "@opencode-ai/sdk/v2"
+
+interface ThemeColors {
+  foreground?: string
+  muted?: string
+  red?: string
+  primary?: string
+  selectedListItemText?: string
+}
 
 interface CategoryEntry {
   label: string
@@ -67,8 +74,8 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
           const fg = theme?.foreground ?? "#ffffff"
           const muted = theme?.muted ?? "#888888"
           const red = theme?.red ?? "#ef4444"
-          const primary = (theme as any)?.primary
-          const selectedText = (theme as any)?.selectedListItemText
+          const primary = (theme as ThemeColors)?.primary
+          const selectedText = (theme as ThemeColors)?.selectedListItemText
           const BAR_WIDTH = 50
           const sidDisplay = currentSessionID.length > 8
             ? currentSessionID.slice(0, 8) + "…"
@@ -86,16 +93,10 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
           const [showRaw, setShowRaw] = createSignal(false)
           const [rawSystemText, setRawSystemText] = createSignal("")
 
-          let scrollRef: any = null
-          const [isScrolled, setIsScrolled] = createSignal(false)
-          const [isAtBottom, setIsAtBottom] = createSignal(false)
-          const [hasOverflow, setHasOverflow] = createSignal(false)
-          let dialogKeyLayer: any = null
           let pollInterval: any = null
-          // Stale-load guard: incremented on every reload so a slow in-flight
-          // fetch can detect it's been superseded and bail. Mirrors the
-          // tokenLoadGeneration pattern in sidebar.tsx.
-          let loadGeneration = 0
+          let cleanupKeyLayer: (() => void) | null = null
+          const scroll = makeScrollState(createSignal)
+          const loadGuard = createLoadGuard()
 
           // ── Tabs ─────────────────────────────────────────────────────────
           // Dynamic tab list — only show tabs that have data. The memo reads
@@ -103,7 +104,7 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
           const tabs = createMemo(() => {
             const t: { id: string; label: string }[] = [{ id: "context", label: "Context" }]
             if (hasToolsSection()) t.push({ id: "tools", label: "Per-Tool" })
-            const sysCat = categories().find((c: any) => c.name.startsWith("SYSTEM"))
+            const sysCat = categories().find((c: Category) => c.name.startsWith("SYSTEM"))
             if (sysCat && sysCat.entries.length >= 2) t.push({ id: "system", label: "System" })
             if (topContributors().length > 0) t.push({ id: "top", label: "Top" })
             return t
@@ -119,49 +120,19 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
               return next
             })
             // Reset scroll to top on tab switch.
-            if (scrollRef?.scrollTo) {
-              try { scrollRef.scrollTo(0) } catch { /* ignore */ }
-            }
-            setIsScrolled(false)
-            setIsAtBottom(false)
+            scroll.scrollToTop()
             setShowRaw(false)
             // Re-check overflow after tab switch (different content heights).
-            setTimeout(() => checkOverflow(), 50)
-          }
-
-          // ── Overflow checker ──────────────────────────────────────────────
-          // Compares scrollHeight vs clientHeight to determine if the
-          // scrollbox content overflows. Mirrors the hasOverflow heuristic
-          // from /usage but uses actual DOM dimensions instead of entry count.
-          function checkOverflow() {
-            const sh = scrollRef?.scrollHeight ?? 0
-            const ch = scrollRef?.clientHeight ?? scrollRef?.height ?? 40
-            setHasOverflow(sh > ch + 2)
+            setTimeout(() => scroll.checkOverflow(), 50)
           }
 
           // ── Key handler ───────────────────────────────────────────────────
           function handleKey(key: string) {
             if (key === "up") {
-              scrollRef?.scrollBy?.(-10)
-              setIsAtBottom(false)
-              setTimeout(() => {
-                const top = scrollRef?.scrollTop ?? 0
-                if (top <= 0) setIsScrolled(false)
-                checkOverflow()
-              }, 50)
-              return true
+              return scroll.handleUp()
             }
             if (key === "down") {
-              scrollRef?.scrollBy?.(10)
-              setIsScrolled(true)
-              setTimeout(() => {
-                const st = scrollRef?.scrollTop ?? 0
-                const ch = scrollRef?.clientHeight ?? scrollRef?.height ?? 40
-                const sh = scrollRef?.scrollHeight ?? 0
-                setIsAtBottom(st + ch >= sh - 5)
-                checkOverflow()
-              }, 50)
-              return true
+              return scroll.handleDown()
             }
             return false
           }
@@ -215,7 +186,7 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
 
           // ── Data loader ───────────────────────────────────────────────────
           async function loadAnalysis() {
-            const gen = loadGeneration
+            const gen = loadGuard.invalidate()
             try {
               const result = await api.client.session.messages({
                 sessionID: currentSessionID,
@@ -223,9 +194,9 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
               })
               // Stale-load guard: a newer reload() incremented the counter,
               // meaning this fetch is superseded — discard its results.
-              if (gen !== loadGeneration) { log("analyze: stale fetch, discarding"); return }
-              const rawResult = (result as any)?.data ?? result
-              const messages = Array.isArray(rawResult) ? rawResult : []
+              if (!loadGuard.isCurrent(gen)) { log("analyze: stale fetch, discarding"); return }
+              const apiResult = result as SessionMessagesResponse
+              const messages: Array<{ id?: string; info: Message; parts: Part[] }> = Array.isArray(apiResult.data) ? apiResult.data as any : []
               setMessageCount(messages.length)
               log("=== analyze: loaded", messages.length, "messages for session", currentSessionID, "===")
 
@@ -264,8 +235,9 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
               log("analyze: baselineTokens (Tier 1) =", baselineTokens)
 
               for (const msg of messages) {
-                const info = msg.info as any
-                const parts: any[] = msg.parts ?? []
+                const info = msg.info as Message
+                if (info.role !== "assistant" && info.role !== "user") continue
+                const parts: any[] = (msg.parts ?? []) as any[]
                 const msgId = msg.id ?? (info as any)?.id
                 log("analyze: msg", msgId, "role:", info.role, "parts:", parts.length)
 
@@ -548,7 +520,7 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
 
               setLoading(false)
               // Check overflow after content renders.
-              setTimeout(() => checkOverflow(), 50)
+              setTimeout(() => scroll.checkOverflow(), 50)
             } catch (err) {
               setErrorMsg(String(err))
               setLoading(false)
@@ -561,7 +533,7 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
           // Manual only — auto-poll uses backgroundReload() below.
           function reload() {
             log("analyze: reload triggered")
-            loadGeneration++
+            loadGuard.invalidate()
             setShowRaw(false)
             setRawSystemText("")
             setLoading(true)
@@ -577,7 +549,7 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
           const AUTO_POLL_MS = 60_000
           function backgroundReload() {
             log("analyze: background reload")
-            loadGeneration++
+            loadGuard.invalidate()
             loadAnalysis()
           }
 
@@ -587,7 +559,7 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
               api.ui.dialog.setSize("large")
 
               // Register dialog key layer for scroll + tabs + reload
-              dialogKeyLayer = api.keymap.registerLayer({
+              cleanupKeyLayer = registerDialogKeyLayer(api, {
                 bindings: [
                   { key: "up",   cmd: "analyze.scrollUp",   desc: "Scroll up" },
                   { key: "k",    cmd: "analyze.scrollUp",   desc: "Scroll up" },
@@ -601,16 +573,16 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                   { key: "r",    cmd: "analyze.reload",     desc: "Reload" },
                 ],
                 commands: [
-                  { name: "analyze.scrollUp",   title: "Scroll Up",   async run() { handleKey("up") } },
-                  { name: "analyze.scrollDown", title: "Scroll Down", async run() { handleKey("down") } },
-                  { name: "analyze.tabLeft",    title: "Previous Tab", async run() { switchTab(-1) } },
-                  { name: "analyze.tabRight",   title: "Next Tab",     async run() { switchTab(1) } },
-                  { name: "analyze.toggleRaw",  title: "Raw Prompt",   async run() {
+                  { name: "analyze.scrollUp",   title: "Scroll Up",   run: async () => { handleKey("up") } },
+                  { name: "analyze.scrollDown", title: "Scroll Down", run: async () => { handleKey("down") } },
+                  { name: "analyze.tabLeft",    title: "Previous Tab", run: async () => { switchTab(-1) } },
+                  { name: "analyze.tabRight",   title: "Next Tab",     run: async () => { switchTab(1) } },
+                  { name: "analyze.toggleRaw",  title: "Raw Prompt",   run: async () => {
                     const list = tabs()
                     const idx = Math.min(activeTab(), list.length - 1)
                     if (list[idx]?.id === "system") setShowRaw((s) => !s)
                   } },
-                  { name: "analyze.reload",     title: "Reload",      async run() { reload() } },
+                  { name: "analyze.reload",     title: "Reload",      run: async () => { reload() } },
                 ],
               })
 
@@ -626,9 +598,9 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
             })
 
             onCleanup(() => {
-              if (dialogKeyLayer) {
-                try { dialogKeyLayer() } catch { /* ignore */ }
-                dialogKeyLayer = null
+              if (cleanupKeyLayer) {
+                try { cleanupKeyLayer() } catch { /* ignore */ }
+                cleanupKeyLayer = null
               }
               if (pollInterval) {
                 clearInterval(pollInterval)
@@ -672,10 +644,10 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                 })()}
 
                 {/* ── "more above" indicator ───────────────────────────── */}
-                <text fg={muted}>{hasOverflow() && isScrolled() ? "▲ more above" : " "}</text>
+                <text fg={muted}>{scroll.hasOverflow() && scroll.isScrolled() ? "▲ more above" : " "}</text>
 
                 <scrollbox
-                  ref={scrollRef}
+                  ref={(el) => scroll.scrollRef = el}
                   flexDirection="column"
                   gap={1}
                   maxHeight={40}
@@ -727,7 +699,7 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
 
                       // ── Per-Tool tab ───────────────────────────────────
                       if (tab.id === "tools") {
-                        const toolsCat = categories().find((c: any) => c.name === "TOOLS")
+                        const toolsCat = categories().find((c: Category) => c.name === "TOOLS")
                         if (!toolsCat || toolsCat.entries.length === 0) {
                           return <text fg={muted}>No tool data.</text>
                         }
@@ -737,7 +709,7 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                             <text fg={fg}><b>Per-Tool Breakdown</b></text>
                             <text> </text>
                             <box flexDirection="column" gap={1}>
-                              {toolsCat.entries.map((entry: any) => {
+                              {toolsCat.entries.map((entry: CategoryEntry) => {
                                 const pct = total > 0 ? (entry.tokens / total) * 100 : 0
                                 const bar = buildBar(pct, BAR_WIDTH)
                                 return (
@@ -755,7 +727,7 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
 
                       // ── System tab ────────────────────────────────────
                       if (tab.id === "system") {
-                        const sysCat = categories().find((c: any) => c.name.startsWith("SYSTEM"))
+                        const sysCat = categories().find((c: Category) => c.name.startsWith("SYSTEM"))
                         if (!sysCat || sysCat.entries.length < 2) {
                           return <text fg={muted}>No system breakdown data.</text>
                         }
@@ -777,13 +749,13 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                           )
                         }
 
-                        const sorted = [...sysCat.entries].sort((a: any, b: any) => b.tokens - a.tokens)
+                        const sorted = [...sysCat.entries].sort((a: CategoryEntry, b: CategoryEntry) => b.tokens - a.tokens)
                         return (
                           <box paddingBottom={1}>
                             <text fg={fg}><b>System Breakdown</b> ({safeFmt(sysTotal)} tokens)</text>
                             <text> </text>
                             <box flexDirection="column" gap={1}>
-                              {sorted.map((entry: any, i: number) => {
+                              {sorted.map((entry: CategoryEntry, i: number) => {
                                 const pct = sysTotal > 0 ? (entry.tokens / sysTotal) * 100 : 0
                                 const bar = buildBar(pct, BAR_WIDTH)
                                 return (
@@ -824,7 +796,7 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                 </scrollbox>
 
                 {/* ── "more below" indicator ────────────────────────────── */}
-                <text fg={muted}>{hasOverflow() && !isAtBottom() ? "▼ more below" : " "}</text>
+                <text fg={muted}>{scroll.hasOverflow() && !scroll.isAtBottom() ? "▼ more below" : " "}</text>
 
                 {/* ── Footer hints ──────────────────────────────────────── */}
                 {(() => {
@@ -833,7 +805,7 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                   const isSys = list[idx]?.id === "system"
                   return (
                     <text fg={muted}>
-                      ← → tabs  ·  ↑↓ scroll{isSys ? "  ·  v raw" : ""}  ·  r reload  ·  auto ↻60s
+                      ← → tabs  ·  ↑↓ scroll{isSys ? "  ·  v raw" : ""}  ·  r reload
                     </text>
                   )
                 })()}

@@ -1,7 +1,25 @@
 import { existsSync, readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import type { CopilotQuotaInfo, GoQuotaInfo } from "./types"
-import { log } from "./helpers"
+import { log } from "./helpers/debug"
+
+/**
+ * Creates a simple re-entrancy guard. Returns a wrapper that ensures only one
+ * call to `fn` is in-flight at a time. Subsequent calls while a previous one is
+ * pending are silently dropped.
+ */
+export function withGuard<T>(fn: () => Promise<T>): () => Promise<T | undefined> {
+  let inFlight = false
+  return async () => {
+    if (inFlight) return undefined
+    inFlight = true
+    try {
+      return await fn()
+    } finally {
+      inFlight = false
+    }
+  }
+}
 
 export function getGoAuth(): { type: "bearer" | "cookie"; value: string } | null {
   // Cookie auth first — required for fetching the web console page

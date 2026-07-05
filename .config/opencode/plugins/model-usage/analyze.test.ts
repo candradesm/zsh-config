@@ -1,10 +1,6 @@
 import { describe, expect, it } from "bun:test"
-import {
-  estimateTokens,
-  rawPromptTokens,
-  scaleEntries,
-  splitSystemFragments,
-} from "./helpers"
+import { estimateTokens, rawPromptTokens, scaleEntries } from "./helpers/tokens"
+import { splitSystemFragments } from "./helpers/fragments"
 import { loadBaseline } from "./db"
 
 // ─── estimateTokens ───────────────────────────────────────────────────────────

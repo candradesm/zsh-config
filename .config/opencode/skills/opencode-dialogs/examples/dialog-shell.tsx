@@ -1,31 +1,14 @@
 /** @jsxImportSource @opentui/solid */
 import { onMount, onCleanup, createSignal } from "solid-js"
+import { makeScrollState } from "./shared/scroll"
+import { registerDialogKeyLayer } from "./shared/keys"
 
 // ── Scroll state ───────────────────────────────────────────────────
-let scrollRef: any = null
-const [isScrolled, setIsScrolled] = createSignal(false)
-const [isAtBottom, setIsAtBottom] = createSignal(false)
+const scroll = makeScrollState(createSignal)
 
 function handleKey(key: string) {
-  if (key === "up") {
-    scrollRef?.scrollBy?.(-10)
-    setIsAtBottom(false)
-    setTimeout(() => {
-      if ((scrollRef?.scrollTop ?? 0) <= 0) setIsScrolled(false)
-    }, 50)
-    return true
-  }
-  if (key === "down") {
-    scrollRef?.scrollBy?.(10)
-    setIsScrolled(true)
-    setTimeout(() => {
-      const st = scrollRef?.scrollTop ?? 0
-      const ch = scrollRef?.clientHeight ?? scrollRef?.height ?? 40
-      const sh = scrollRef?.scrollHeight ?? 0
-      setIsAtBottom(st + ch >= sh - 5)
-    }, 50)
-    return true
-  }
+  if (key === "up") return scroll.handleUp()
+  if (key === "down") return scroll.handleDown()
   return false
 }
 
@@ -36,13 +19,13 @@ function renderDialog() {
   const red = theme?.red ?? "#ef4444"
 
   // Key layer
-  let dialogKeyLayer: any = null
+  let cleanupKeyLayer: (() => void) | null = null
 
   api.ui.dialog.replace(() => {
     onMount(() => {
       api.ui.dialog.setSize("large")
 
-      dialogKeyLayer = api.keymap.registerLayer({
+      cleanupKeyLayer = registerDialogKeyLayer(api, {
         bindings: [
           { key: "up",   cmd: "example.scrollUp",   desc: "Scroll up" },
           { key: "k",    cmd: "example.scrollUp",   desc: "Scroll up" },
@@ -50,8 +33,8 @@ function renderDialog() {
           { key: "j",    cmd: "example.scrollDown", desc: "Scroll down" },
         ],
         commands: [
-          { name: "example.scrollUp",   title: "Scroll Up",   async run() { handleKey("up") } },
-          { name: "example.scrollDown", title: "Scroll Down", async run() { handleKey("down") } },
+          { name: "example.scrollUp",   title: "Scroll Up",   run: async () => { handleKey("up") } },
+          { name: "example.scrollDown", title: "Scroll Down", run: async () => { handleKey("down") } },
         ],
       })
 
@@ -59,9 +42,9 @@ function renderDialog() {
     })
 
     onCleanup(() => {
-      if (dialogKeyLayer) {
-        try { dialogKeyLayer() } catch { /* ignore */ }
-        dialogKeyLayer = null
+      if (cleanupKeyLayer) {
+        try { cleanupKeyLayer() } catch { /* ignore */ }
+        cleanupKeyLayer = null
       }
     })
 
@@ -77,10 +60,10 @@ function renderDialog() {
         </box>
 
         {/* More above indicator */}
-        <text fg={muted}>{hasData && isScrolled() ? "▲ more above" : " "}</text>
+        <text fg={muted}>{hasData && scroll.isScrolled() ? "▲ more above" : " "}</text>
 
         <scrollbox
-          ref={scrollRef}
+          ref={(el) => scroll.scrollRef = el}
           flexDirection="column"
           gap={1}
           maxHeight={40}
@@ -103,7 +86,7 @@ function renderDialog() {
         </scrollbox>
 
         {/* More below indicator */}
-        <text fg={muted}>{hasData && !isAtBottom() ? "▼ more below" : " "}</text>
+        <text fg={muted}>{hasData && !scroll.isAtBottom() ? "▼ more below" : " "}</text>
 
         {/* Footer */}
         <text fg={muted}>↑↓ scroll  ·  esc close</text>

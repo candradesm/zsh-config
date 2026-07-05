@@ -1,20 +1,17 @@
 /** @jsxImportSource @opentui/solid */
 import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
-import type { EventMessageUpdated } from "@opencode-ai/sdk/v2"
+import type { AssistantMessage, Message, EventMessageUpdated, EventSessionCompacted, EventSessionCreated } from "@opencode-ai/sdk/v2"
 import { createSignal, createEffect, createMemo, onCleanup } from "solid-js"
 import type { CopilotQuotaInfo, GoQuotaInfo } from "./types"
-import {
-  log as logFn,
-  DEBUG,
-  isSupportedModel, buildProgressBar, getUsageColor, getQuotaLabel,
-  formatDuration,
-  splitCost,
-  logPath,
-} from "./helpers"
+import { log as logFn, DEBUG, logPath } from "./helpers/debug"
+import { isSupportedModel } from "./helpers/model"
+import { buildProgressBar, getUsageColor, getQuotaLabel, formatDuration } from "./helpers/format"
+import { splitCost } from "./helpers/cost"
 import { appendFileSync } from "node:fs"
+import { createLoadGuard } from "./shared/reload"
+import { fetchQuotaInfo, fetchGoQuota, withGuard } from "./quota"
 
 const log = logFn
-import { fetchQuotaInfo, fetchGoQuota } from "./quota"
 
 const QUOTA_REFRESH_MS = 5 * 60 * 1000
 const QUOTA_EVENT_MIN_INTERVAL_MS = 2 * 60 * 1000  // min gap between event-driven fetches
@@ -22,6 +19,11 @@ const MAX_POLL_ATTEMPTS = 30
 const PLUGIN_VERSION = "v41"
 
 log(`=== usage-sidebar ${PLUGIN_VERSION} loaded ===`)
+
+interface Theme {
+  foreground?: string
+  muted?: string
+}
 
 function getActiveModel(api: TuiPluginApi, sessionID: string): string | null {
   try {
@@ -40,6 +42,7 @@ function getActiveModel(api: TuiPluginApi, sessionID: string): string | null {
           log("getActiveModel: assistant msg providerID:", m.providerID, "modelID:", m.modelID)
         }
         if (m.role === "user") {
+          // `model` only exists on UserMessage, already guarded by role check
           log("getActiveModel: user msg model:", JSON.stringify((m as any).model))
         }
       }
@@ -71,36 +74,26 @@ function getActiveModel(api: TuiPluginApi, sessionID: string): string | null {
   return null
 }
 
-function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
-  log("UsageSidebar: rendering! session_id:", props.session_id)
-  const githubToken = process.env.GITHUB_TOKEN ?? ""
-  const hasToken = !!githubToken
+// ─── Token tracking hook ──────────────────────────────────────────────────────
 
-  const [quotaInfo, setQuotaInfo] = createSignal<CopilotQuotaInfo | null>(null)
-  const [quotaLoading, setQuotaLoading] = createSignal<boolean>(false)
-  const [activeModel, setActiveModel] = createSignal<string | null>(null)
+function useTokenTracking(props: { api: TuiPluginApi; sessionID: string }) {
   const [peakInputTokens, setPeakInputTokens] = createSignal<number>(0)
   const [totalOutputTokens, setTotalOutputTokens] = createSignal<number>(0)
   const [totalInputCost, setTotalInputCost] = createSignal<number>(0)
   const [totalOutputCost, setTotalOutputCost] = createSignal<number>(0)
-
-  const [goQuota, setGoQuota] = createSignal<GoQuotaInfo | null>(null)
-  const [goQuotaLoading, setGoQuotaLoading] = createSignal(false)
 
   // Maps messageID → last seen token snapshot for delta calculation (cost billing)
   const processedAssistantMessages = new Map<string, { input: number; cacheRead: number; output: number; cost: number }>()
   // Maps sessionID → peak context window (input + cacheRead) ever seen in that session (for ↑ display)
   const peakPerSession = new Map<string, number>()
   const trackedSessions = new Set<string>()
-  let loadedQuotaSessionID: string | null = null
-  let loadedGoQuotaSessionID: string | null = null
   let loadedTokenRootSessionID: string | null = null
-  let tokenLoadGeneration = 0
   let loadedAllSessionsForRoot: string | null = null
-  let lastQuotaFetchAt = 0  // timestamp of last event-driven fetchQuota call
+  const loadGuard = createLoadGuard()
+  let currentTokenGen = loadGuard.invalidate()
 
   function resetTokenTracking(sessionID: string) {
-    tokenLoadGeneration++
+    currentTokenGen = loadGuard.invalidate()
     processedAssistantMessages.clear()
     peakPerSession.clear()
     trackedSessions.clear()
@@ -130,42 +123,42 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
   }
 
   async function loadSessionTokens(sessionID: string) {
-    const generation = tokenLoadGeneration
+    const gen = currentTokenGen
     try {
       const result = await props.api.client.session.messages({ sessionID, limit: 10000 })
-      if (generation !== tokenLoadGeneration) return
-      const rawResult = (result as any)?.data ?? result
+      if (!loadGuard.isCurrent(gen)) return
+      const rawResult = (result as { data: Array<{ id: string; info: Message }> }).data ?? result
       const messages = Array.isArray(rawResult) ? rawResult : []
       log("loadSessionTokens:", sessionID, "raw type:", typeof (result as any)?.data, "isArray:", Array.isArray((result as any)?.data), "count:", messages.length)
       const itemLogLines: string[] = []
       for (const item of messages) {
-        const msgId = item.id ?? (item.info as any)?.id
+        const msgId = item.id ?? item.info?.id
         if (!msgId) continue
-        const role = item.info?.role ?? (item as any)?.role
-        if (DEBUG) itemLogLines.push(`[${new Date().toISOString()}] loadSessionTokens item: ${msgId} role: ${role} inputTok: ${(item.info as any)?.tokens?.input} outputTok: ${(item.info as any)?.tokens?.output}`)
+        const role = item.info?.role
+        if (DEBUG) itemLogLines.push(`[${new Date().toISOString()}] loadSessionTokens item: ${msgId} role: ${role} inputTok: ${item.info && "tokens" in item.info ? (item.info as AssistantMessage).tokens?.input : 0} outputTok: ${item.info && "tokens" in item.info ? (item.info as AssistantMessage).tokens?.output : 0}`)
         if (role !== "assistant") continue
 
-        const info = item.info as any
-        const inputTok: number = info?.tokens?.input ?? 0
-        const cacheReadTok: number = info?.tokens?.cache?.read ?? 0
-        const outputTok: number = info?.tokens?.output ?? 0
+        const info = item.info as AssistantMessage
+        const inputTok: number = info.tokens?.input ?? 0
+        const cacheReadTok: number = info.tokens?.cache?.read ?? 0
+        const outputTok: number = info.tokens?.output ?? 0
         if (inputTok === 0 && cacheReadTok === 0 && outputTok === 0) continue
 
         const prevSnapshot = processedAssistantMessages.get(msgId) ?? { input: 0, cacheRead: 0, output: 0, cost: 0 }
         const deltaInput = Math.max(0, inputTok - prevSnapshot.input)
         const deltaCacheRead = Math.max(0, cacheReadTok - prevSnapshot.cacheRead)
         const deltaOutput = Math.max(0, outputTok - prevSnapshot.output)
-        const deltaCost = Math.max(0, (info?.cost ?? 0) - prevSnapshot.cost)
+        const deltaCost = Math.max(0, (info.cost ?? 0) - prevSnapshot.cost)
         if (deltaInput === 0 && deltaCacheRead === 0 && deltaOutput === 0 && deltaCost === 0) continue
 
-        processedAssistantMessages.set(msgId, { input: inputTok, cacheRead: cacheReadTok, output: outputTok, cost: info?.cost ?? 0 })
+        processedAssistantMessages.set(msgId, { input: inputTok, cacheRead: cacheReadTok, output: outputTok, cost: info.cost ?? 0 })
 
         updatePeakContext(sessionID, inputTok, cacheReadTok, outputTok)
         setTotalOutputTokens((prev) => prev + deltaOutput)
         if (deltaCost > 0) {
           const { inputCost, outputCost } = splitCost(
             deltaInput, deltaCacheRead, deltaOutput, deltaCost,
-            info?.modelID ?? "",
+            info.modelID ?? "",
             props.api.state.provider ?? []
           )
           setTotalInputCost(prev => prev + inputCost)
@@ -184,7 +177,7 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
     if (loadedTokenRootSessionID !== sessionID) {
       resetTokenTracking(sessionID)
     }
-    const generation = tokenLoadGeneration
+    const gen = currentTokenGen
 
     if (!trackedSessions.has(sessionID)) {
       trackedSessions.add(sessionID)
@@ -196,14 +189,14 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
       loadedAllSessionsForRoot = sessionID
       try {
         const sessionList = await props.api.client.session.list({ limit: 200 })
-        if (generation !== tokenLoadGeneration) return
-        const allSessions = (sessionList as any)?.data ?? sessionList ?? []
+        if (!loadGuard.isCurrent(gen)) return
+        const allSessions: Array<{ id?: string; sessionID?: string; parentID?: string; info?: { parentID?: string } }> = Array.isArray(sessionList) ? sessionList : ((sessionList as any)?.data ?? (sessionList as any)?.[200] ?? [])
         let changed = true
         while (changed) {
           changed = false
           for (const s of allSessions) {
-            const sid = s.id ?? s.sessionID
-            const pid = s.parentID ?? s.info?.parentID
+            const sid = s.id
+            const pid = s.parentID
             if (!sid || trackedSessions.has(sid)) continue
             if (pid && trackedSessions.has(pid)) {
               trackedSessions.add(sid)
@@ -218,43 +211,94 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
     }
   }
 
-  let isFetchingQuota = false
-  let isFetchingGoQuota = false
+  return {
+    peakInputTokens, totalOutputTokens, totalInputCost, totalOutputCost,
+    processedAssistantMessages, peakPerSession, trackedSessions,
+    resetTokenTracking, updatePeakContext, loadRelatedSessionTokens,
+    loadSessionTokens,
+    loadGuard,
+  }
+}
 
-  async function fetchQuota() {
-    if (isFetchingQuota) return
-    if (!hasToken) {
+// ─── Quota fetching hook ──────────────────────────────────────────────────────
+
+function useQuotaFetching(props: { api: TuiPluginApi; sessionID: string; githubToken: string; hasToken: boolean; currentModel: () => string | null }) {
+  const [quotaInfo, setQuotaInfo] = createSignal<CopilotQuotaInfo | null>(null)
+  const [quotaLoading, setQuotaLoading] = createSignal<boolean>(false)
+  const [goQuota, setGoQuota] = createSignal<GoQuotaInfo | null>(null)
+  const [goQuotaLoading, setGoQuotaLoading] = createSignal(false)
+
+  let lastQuotaFetchAt = 0  // timestamp of last event-driven fetchQuota call
+
+  const guardedFetchQuota = withGuard(async () => {
+    if (!props.hasToken) {
       log("fetchQuota: no GITHUB_TOKEN set")
       setQuotaInfo(null)
       setQuotaLoading(false)
       return
     }
-    isFetchingQuota = true
-    log("fetchQuota: starting, token length:", githubToken.length)
+    log("fetchQuota: starting, token length:", props.githubToken.length)
     lastQuotaFetchAt = Date.now()
     // Only show loading on initial fetch — keep old data visible during refresh
     if (!quotaInfo()) setQuotaLoading(true)
     try {
-      const info = await fetchQuotaInfo(githubToken)
+      const info = await fetchQuotaInfo(props.githubToken)
       log("fetchQuota: got info:", JSON.stringify(info))
       setQuotaInfo(info)
     } finally {
       setQuotaLoading(false)
-      isFetchingQuota = false
     }
-  }
+  })
 
-  async function fetchGoQuotaGuarded() {
-    if (isFetchingGoQuota) return
-    isFetchingGoQuota = true
+  const guardedFetchGoQuota = withGuard(async () => {
+    setGoQuotaLoading(true)
     try {
       const info = await fetchGoQuota()
       setGoQuota(info)
     } finally {
       setGoQuotaLoading(false)
-      isFetchingGoQuota = false
     }
+  })
+
+  const fetchQuota = guardedFetchQuota
+  const fetchGoQuotaGuarded = guardedFetchGoQuota
+
+  const isCopilotActive = createMemo(() => props.currentModel()?.toLowerCase().includes("copilot") ?? false)
+  const isOpenCodeGoActive = createMemo(() => props.currentModel()?.toLowerCase().includes("opencode-go") ?? false)
+
+  // Quota refresh intervals — registered once so they are not cancelled and
+  // recreated on every reactive re-run (every message update).
+  const refreshInterval = setInterval(() => {
+    fetchQuota()
+  }, QUOTA_REFRESH_MS)
+
+  const goRefreshInterval = setInterval(() => {
+    if (props.currentModel()?.toLowerCase().includes("opencode-go")) {
+      fetchGoQuotaGuarded()
+    }
+  }, QUOTA_REFRESH_MS)
+
+  onCleanup(() => {
+    clearInterval(refreshInterval)
+    clearInterval(goRefreshInterval)
+  })
+
+  return {
+    quotaInfo, quotaLoading, goQuota, goQuotaLoading,
+    fetchQuota, fetchGoQuotaGuarded,
+    getLastQuotaFetchAt: () => lastQuotaFetchAt,
+    isCopilotActive, isOpenCodeGoActive,
   }
+}
+
+// ─── Sidebar component ────────────────────────────────────────────────────────
+
+function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
+  log("UsageSidebar: rendering! session_id:", props.session_id)
+  const githubToken = process.env.GITHUB_TOKEN ?? ""
+  const hasToken = !!githubToken
+
+  const [activeModel, setActiveModel] = createSignal<string | null>(null)
 
   // Reactive model detection: re-runs when config.model or session changes
   // api.state is SolidJS-backed, so property access creates reactive dependencies
@@ -262,6 +306,30 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
     props.api.state.config?.model // track model changes
     return getActiveModel(props.api, props.session_id)
   })
+
+  const tokenTracking = useTokenTracking({ api: props.api, sessionID: props.session_id })
+  const {
+    peakInputTokens, totalOutputTokens, totalInputCost, totalOutputCost,
+    processedAssistantMessages, peakPerSession, trackedSessions,
+    resetTokenTracking, updatePeakContext, loadRelatedSessionTokens,
+    loadSessionTokens,
+  } = tokenTracking
+
+  const {
+    quotaInfo, quotaLoading, goQuota, goQuotaLoading,
+    fetchQuota, fetchGoQuotaGuarded,
+    getLastQuotaFetchAt,
+    isCopilotActive, isOpenCodeGoActive,
+  } = useQuotaFetching({
+    api: props.api,
+    sessionID: props.session_id,
+    githubToken,
+    hasToken,
+    currentModel,
+  })
+
+  let loadedQuotaSessionID: string | null = null
+  let loadedGoQuotaSessionID: string | null = null
 
   // Fallback: poll for model changes in case api.state isn't reactive on first load
   let pollCount = 0
@@ -289,10 +357,10 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
     // Determine if this is the root/primary session (no parentID) or a subagent session.
     let isRootSession = true
     props.api.client.session.list({ limit: 200 })
-      .then((result: any) => {
-        const sessions = (result as any)?.data ?? result ?? []
-        const session = sessions.find((s: any) => (s.id ?? s.sessionID) === sessionID)
-        const parentID = session?.parentID ?? session?.info?.parentID
+      .then((result) => {
+        const sessions: Array<{ id?: string; sessionID?: string; parentID?: string; info?: { parentID?: string } }> = Array.isArray(result) ? result : ((result as any)?.data ?? (result as any)?.[200] ?? [])
+        const session = sessions.find((s) => s.id === sessionID)
+        const parentID = session?.parentID
         isRootSession = !parentID
         log("createEffect: sessionID:", sessionID, "parentID:", parentID, "isRootSession:", isRootSession)
       })
@@ -315,27 +383,26 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
         // opencode-go: fetch go quota once per session change
         if (loadedGoQuotaSessionID !== sessionID) {
           loadedGoQuotaSessionID = sessionID
-          setGoQuotaLoading(true)
           fetchGoQuotaGuarded()
         }
       }
     }
 
-    const unsubMessageAll = props.api.event.on("message.updated", (event: any) => {
+    const unsubMessageAll = props.api.event.on("message.updated", (event) => {
       try {
-        const sessionID_outer = sessionID
         const e = event as EventMessageUpdated
-        const evtSID = e.properties?.sessionID ?? (event as any).properties?.sessionID
-        const msg = e.properties?.info ?? (event as any).properties?.info
+        const evtSID = e.properties.sessionID
+        const msg = e.properties.info
 
         // --- Token cost counting (assistant messages, all tracked sessions) ---
-        if (trackedSessions.has(evtSID) && msg?.role === "assistant") {
-          const msgId = msg?.id
+        if (trackedSessions.has(evtSID) && msg.role === "assistant") {
+          const info = msg as AssistantMessage
+          const msgId = info.id
           if (msgId) {
-            const inputTok: number = (msg as any)?.tokens?.input ?? 0
-            const cacheReadTok: number = (msg as any)?.tokens?.cache?.read ?? 0
-            const outputTok: number = (msg as any)?.tokens?.output ?? 0
-            const msgCost: number = (msg as any)?.cost ?? 0
+            const inputTok: number = info.tokens?.input ?? 0
+            const cacheReadTok: number = info.tokens?.cache?.read ?? 0
+            const outputTok: number = info.tokens?.output ?? 0
+            const msgCost: number = info.cost ?? 0
             if (inputTok > 0 || cacheReadTok > 0 || outputTok > 0 || msgCost > 0) {
               const prevSnapshot = processedAssistantMessages.get(msgId) ?? { input: 0, cacheRead: 0, output: 0, cost: 0 }
               const deltaInput = Math.max(0, inputTok - prevSnapshot.input)
@@ -349,7 +416,7 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
                 if (deltaCost > 0) {
                   const { inputCost, outputCost } = splitCost(
                     deltaInput, deltaCacheRead, deltaOutput, deltaCost,
-                    (msg as any)?.modelID ?? "",
+                    info.modelID,
                     props.api.state.provider ?? []
                   )
                   setTotalInputCost(prev => prev + inputCost)
@@ -365,11 +432,12 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
     })
 
     const unsubCompacted = props.api.event.on("session.compacted", (evt) => {
-      const evtSID = (evt as any).properties?.sessionID
+      const e = evt as EventSessionCompacted
+      const evtSID = e.properties.sessionID
 
       // Refresh quota only for root session compaction
       if (evtSID === sessionID) {
-        if (isRootSession && Date.now() - lastQuotaFetchAt > QUOTA_EVENT_MIN_INTERVAL_MS) {
+        if (isRootSession && Date.now() - getLastQuotaFetchAt() > QUOTA_EVENT_MIN_INTERVAL_MS) {
           fetchQuota()
           log("session.compacted: quota refreshed, sessionID:", sessionID)
         } else {
@@ -387,8 +455,8 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
       }
     })
 
-    const unsubSessionCreated = props.api.event.on("session.created", (event: any) => {
-      const { sessionID: newSID, info } = event.properties ?? {}
+    const unsubSessionCreated = props.api.event.on("session.created", (event: EventSessionCreated) => {
+      const { sessionID: newSID, info } = event.properties
       const parentID = info?.parentID
       if (!newSID || trackedSessions.has(newSID)) return
       if (parentID && trackedSessions.has(parentID)) {
@@ -403,24 +471,6 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
       unsubCompacted()
       unsubSessionCreated()
     })
-  })
-
-  // Quota refresh intervals — registered once outside createEffect so they are
-  // not cancelled and recreated on every reactive re-run (every message update).
-  const refreshInterval = setInterval(() => {
-    fetchQuota()
-  }, QUOTA_REFRESH_MS)
-
-  const goRefreshInterval = setInterval(() => {
-    if (currentModel()?.toLowerCase().includes("opencode-go")) {
-      setGoQuotaLoading(true)
-      fetchGoQuotaGuarded()
-    }
-  }, QUOTA_REFRESH_MS)
-
-  onCleanup(() => {
-    clearInterval(refreshInterval)
-    clearInterval(goRefreshInterval)
   })
 
   const usagePercentage = createMemo(() => {
@@ -446,25 +496,24 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
     return "Usage"
   })
 
-  const isCopilotActive = createMemo(() => currentModel()?.toLowerCase().includes("copilot") ?? false)
-  const isOpenCodeGoActive = createMemo(() => currentModel()?.toLowerCase().includes("opencode-go") ?? false)
-
   log("UsageSidebar: render, isSupported:", isSupported(), "activeModel:", currentModel())
+
+  const theme = props.api.theme.current as Theme
 
   return (
     <box flexDirection="column" gap={0}>
       {isSupported() ? (
         <>
-          <text fg={props.api.theme.current?.foreground ?? "#ffffff"}><strong>{providerLabel()}</strong></text>
-          <text fg={props.api.theme.current?.muted ?? "#888888"}>Cost estimation</text>
+          <text fg={theme?.foreground ?? "#ffffff"}><strong>{providerLabel()}</strong></text>
+          <text fg={theme?.muted ?? "#888888"}>Cost estimation</text>
           <text fg="#ffffff">{("↑ " + peakInputTokens().toLocaleString() + " tokens").padEnd(26) + "$" + totalInputCost().toFixed(2)}</text>
           <text fg="#ffffff">{("↓ " + totalOutputTokens().toLocaleString() + " tokens").padEnd(26) + "$" + totalOutputCost().toFixed(2)}</text>
-          <text fg={props.api.theme.current?.foreground ?? "#ffffff"}>
+          <text fg={theme?.foreground ?? "#ffffff"}>
             {"Total".padEnd(26) + "$" + (totalInputCost() + totalOutputCost()).toFixed(2)}
           </text>
           {isCopilotActive() ? (
             <>
-              <text fg={props.api.theme.current?.muted ?? "#888888"}>Monthly quota</text>
+              <text fg={theme?.muted ?? "#888888"}>Monthly quota</text>
               {!hasToken ? (
                 <text fg="#eab308">No token provided (set GITHUB_TOKEN)</text>
               ) : quotaInfo()?.unlimited ? (
@@ -485,7 +534,7 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
             </>
           ) : isOpenCodeGoActive() ? (
             <>
-              <text fg={props.api.theme.current?.muted ?? "#888888"}>Quota</text>
+              <text fg={theme?.muted ?? "#888888"}>Quota</text>
               {!goQuota() && goQuotaLoading() ? (
                 <text fg="#888888">Loading...</text>
               ) : goQuota() ? (
@@ -495,25 +544,25 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
                 (goQuota()!.monthly?.usagePercent ?? 0) === 0 ? (
                   <box flexDirection="column" gap={0}>
                     <text fg="#eab308">⚠ Unable to fetch Go quota</text>
-                    <text fg={props.api.theme.current?.muted ?? "#888888"}>Set OPENCODE_GO_AUTH_COOKIE with your browser's auth cookie</text>
+                    <text fg={theme?.muted ?? "#888888"}>Set OPENCODE_GO_AUTH_COOKIE with your browser's auth cookie</text>
                   </box>
                 ) : (
                   <box flexDirection="column" gap={0}>
-                    <text fg={props.api.theme.current?.muted ?? "#888888"}>Rolling (5h)</text>
+                    <text fg={theme?.muted ?? "#888888"}>Rolling (5h)</text>
                     <text fg={getUsageColor(goQuota()!.rolling?.usagePercent ?? 0)}>
                       {goQuota()!.rolling?.usagePercent ?? 0}% · resets in {formatDuration(goQuota()!.rolling?.resetInSec ?? 0)}
                     </text>
                     <text fg={getUsageColor(goQuota()!.rolling?.usagePercent ?? 0)}>
                       {buildProgressBar(goQuota()!.rolling?.usagePercent ?? 0)}
                     </text>
-                    <text fg={props.api.theme.current?.muted ?? "#888888"}>Weekly</text>
+                    <text fg={theme?.muted ?? "#888888"}>Weekly</text>
                     <text fg={getUsageColor(goQuota()!.weekly?.usagePercent ?? 0)}>
                       {goQuota()!.weekly?.usagePercent ?? 0}% · resets in {formatDuration(goQuota()!.weekly?.resetInSec ?? 0)}
                     </text>
                     <text fg={getUsageColor(goQuota()!.weekly?.usagePercent ?? 0)}>
                       {buildProgressBar(goQuota()!.weekly?.usagePercent ?? 0)}
                     </text>
-                    <text fg={props.api.theme.current?.muted ?? "#888888"}>Monthly</text>
+                    <text fg={theme?.muted ?? "#888888"}>Monthly</text>
                     <text fg={getUsageColor(goQuota()!.monthly?.usagePercent ?? 0)}>
                       {goQuota()!.monthly?.usagePercent ?? 0}% · resets in {formatDuration(goQuota()!.monthly?.resetInSec ?? 0)}
                     </text>

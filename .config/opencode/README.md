@@ -50,7 +50,7 @@ Sidebar widget, `/usage` monthly breakdown, and `/analyze` per-session context b
 - **Scroll** — `↑` `↓` (or `j` `k`) with overflow hints (`▲` / `▼`)
 - **Reload** — `r` to re-fetch and recalculate (use mid-conversation to watch the breakdown update as the session grows)
 
-**Files:** `plugins/model-usage.tsx`, `plugins/model-usage-server.ts`, `plugins/model-usage/` (analyze, command, sidebar, db, helpers, quota, types)
+**Files:** `plugins/model-usage.tsx`, `plugins/model-usage-server.ts`, `plugins/model-usage/` (analyze, command, sidebar, db, helpers/, shared/, quota, types)
 **Requires:** `GITHUB_TOKEN` (for Copilot quota), `OPENCODE_GO_WORKSPACE_ID` + `OPENCODE_GO_AUTH_COOKIE` (for Go quota)
 **Debug:** `OPENCODE_COPILOT_DEBUG=true` to enable logs (written to `plugins/logs/`)
 **Tests:** `bun test plugins/model-usage/analyze.test.ts`
