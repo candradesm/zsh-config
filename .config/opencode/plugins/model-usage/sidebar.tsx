@@ -81,6 +81,8 @@ function useTokenTracking(props: { api: TuiPluginApi; sessionID: string }) {
   const [totalOutputTokens, setTotalOutputTokens] = createSignal<number>(0)
   const [totalInputCost, setTotalInputCost] = createSignal<number>(0)
   const [totalOutputCost, setTotalOutputCost] = createSignal<number>(0)
+  const [totalCacheReadTokens, setTotalCacheReadTokens] = createSignal<number>(0)
+  const [totalNonCachedInputTokens, setTotalNonCachedInputTokens] = createSignal<number>(0)
 
   // Maps messageID → last seen token snapshot for delta calculation (cost billing)
   const processedAssistantMessages = new Map<string, { input: number; cacheRead: number; output: number; cost: number }>()
@@ -102,6 +104,8 @@ function useTokenTracking(props: { api: TuiPluginApi; sessionID: string }) {
     setTotalOutputTokens(0)
     setTotalInputCost(0)
     setTotalOutputCost(0)
+    setTotalCacheReadTokens(0)
+    setTotalNonCachedInputTokens(0)
     loadedTokenRootSessionID = sessionID
   }
 
@@ -155,6 +159,8 @@ function useTokenTracking(props: { api: TuiPluginApi; sessionID: string }) {
 
         updatePeakContext(sessionID, inputTok, cacheReadTok, outputTok)
         setTotalOutputTokens((prev) => prev + deltaOutput)
+        setTotalCacheReadTokens((prev) => prev + deltaCacheRead)
+        setTotalNonCachedInputTokens((prev) => prev + deltaInput)
         if (deltaCost > 0) {
           const { inputCost, outputCost } = splitCost(
             deltaInput, deltaCacheRead, deltaOutput, deltaCost,
@@ -213,10 +219,12 @@ function useTokenTracking(props: { api: TuiPluginApi; sessionID: string }) {
 
   return {
     peakInputTokens, totalOutputTokens, totalInputCost, totalOutputCost,
+    totalCacheReadTokens, totalNonCachedInputTokens,
+    setTotalOutputTokens, setTotalCacheReadTokens, setTotalNonCachedInputTokens,
+    setTotalInputCost, setTotalOutputCost,
     processedAssistantMessages, peakPerSession, trackedSessions,
     resetTokenTracking, updatePeakContext, loadRelatedSessionTokens,
     loadSessionTokens,
-    loadGuard,
   }
 }
 
@@ -310,6 +318,9 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
   const tokenTracking = useTokenTracking({ api: props.api, sessionID: props.session_id })
   const {
     peakInputTokens, totalOutputTokens, totalInputCost, totalOutputCost,
+    totalCacheReadTokens, totalNonCachedInputTokens,
+    setTotalOutputTokens, setTotalCacheReadTokens, setTotalNonCachedInputTokens,
+    setTotalInputCost, setTotalOutputCost,
     processedAssistantMessages, peakPerSession, trackedSessions,
     resetTokenTracking, updatePeakContext, loadRelatedSessionTokens,
     loadSessionTokens,
@@ -413,6 +424,8 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
                 processedAssistantMessages.set(msgId, { input: inputTok, cacheRead: cacheReadTok, output: outputTok, cost: msgCost })
                 updatePeakContext(evtSID, inputTok, cacheReadTok, outputTok)
                 setTotalOutputTokens((prev) => prev + deltaOutput)
+                setTotalCacheReadTokens((prev) => prev + deltaCacheRead)
+                setTotalNonCachedInputTokens((prev) => prev + deltaInput)
                 if (deltaCost > 0) {
                   const { inputCost, outputCost } = splitCost(
                     deltaInput, deltaCacheRead, deltaOutput, deltaCost,
@@ -496,6 +509,14 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
     return "Usage"
   })
 
+  const cacheHitRate = createMemo(() => {
+    const cacheRead = totalCacheReadTokens()
+    const nonCached = totalNonCachedInputTokens()
+    const total = cacheRead + nonCached
+    if (total === 0) return null
+    return Math.round((cacheRead / total) * 100)
+  })
+
   log("UsageSidebar: render, isSupported:", isSupported(), "activeModel:", currentModel())
 
   const theme = props.api.theme.current as Theme
@@ -508,6 +529,11 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
           <text fg={theme?.muted ?? "#888888"}>Cost estimation</text>
           <text fg="#ffffff">{("↑ " + peakInputTokens().toLocaleString() + " tokens").padEnd(26) + "$" + totalInputCost().toFixed(2)}</text>
           <text fg="#ffffff">{("↓ " + totalOutputTokens().toLocaleString() + " tokens").padEnd(26) + "$" + totalOutputCost().toFixed(2)}</text>
+          {cacheHitRate() !== null ? (
+            <text fg="#ffffff">
+              {cacheHitRate() + "% cache hit"}
+            </text>
+          ) : null}
           <text fg={theme?.foreground ?? "#ffffff"}>
             {"Total".padEnd(26) + "$" + (totalInputCost() + totalOutputCost()).toFixed(2)}
           </text>
