@@ -43,3 +43,8 @@ export function getQuotaLabel(quota: { planType: string; quotaType: string }): s
   if (quota.quotaType === "ai_credits") return "AI Credits"
   return "premium requests"
 }
+
+export function truncateLabel(label: string, maxLen: number = 26): string {
+  if (label.length <= maxLen) return label.padEnd(maxLen)
+  return label.slice(0, maxLen - 1) + "\u2026"
+}

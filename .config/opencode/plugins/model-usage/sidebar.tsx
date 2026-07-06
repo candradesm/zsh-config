@@ -109,15 +109,13 @@ function useTokenTracking(props: { api: TuiPluginApi; sessionID: string }) {
     loadedTokenRootSessionID = sessionID
   }
 
-  // Track peak context size (input + cacheRead + output) per session.
+  // Track peak input tokens (input + cacheRead — no output) per session.
   // `tokens.cache.read` is the full cached context re-sent every API call — summing across all
   // calls inflates the count (e.g. 514k for a 53k conversation).  Instead, we record the
-  // maximum full-call token count (input + cacheRead + output) per session and sum those peaks
-  // across sessions. Including output in the peak makes the ↑ figure match the OpenCode context
-  // bar (which shows total conversation size including the last response).
-  // Cost is accumulated via info.cost deltas from the API.
-  function updatePeakContext(sessionId: string, inputTok: number, cacheReadTok: number, outputTok: number) {
-    const contextSize = inputTok + cacheReadTok + outputTok
+  // maximum input-prompt token count (input + cacheRead) per session and sum those peaks
+  // across sessions. Output is shown separately on the ↓ line.
+  function updatePeakContext(sessionId: string, inputTok: number, cacheReadTok: number, _outputTok: number) {
+    const contextSize = inputTok + cacheReadTok
     const prev = peakPerSession.get(sessionId) ?? 0
     if (contextSize > prev) {
       const delta = contextSize - prev
@@ -409,12 +407,13 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
         if (trackedSessions.has(evtSID) && msg.role === "assistant") {
           const info = msg as AssistantMessage
           const msgId = info.id
-          if (msgId) {
-            const inputTok: number = info.tokens?.input ?? 0
-            const cacheReadTok: number = info.tokens?.cache?.read ?? 0
-            const outputTok: number = info.tokens?.output ?? 0
-            const msgCost: number = info.cost ?? 0
-            if (inputTok > 0 || cacheReadTok > 0 || outputTok > 0 || msgCost > 0) {
+            if (msgId) {
+              const inputTok: number = info.tokens?.input ?? 0
+              const cacheReadTok: number = info.tokens?.cache?.read ?? 0
+              const outputTok: number = info.tokens?.output ?? 0
+              const msgCost: number = info.cost ?? 0
+              if (inputTok > 0 || cacheReadTok > 0 || outputTok > 0 || msgCost > 0) {
+                log("message.updated: msgId:", msgId, "session:", evtSID, "provider:", info.providerID, "model:", info.modelID, "input:", inputTok, "cacheRead:", cacheReadTok, "output:", outputTok, "cost:", msgCost, "tokens:", JSON.stringify(info.tokens))
               const prevSnapshot = processedAssistantMessages.get(msgId) ?? { input: 0, cacheRead: 0, output: 0, cost: 0 }
               const deltaInput = Math.max(0, inputTok - prevSnapshot.input)
               const deltaCacheRead = Math.max(0, cacheReadTok - prevSnapshot.cacheRead)

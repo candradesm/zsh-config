@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test"
 import { estimateTokens, rawPromptTokens, scaleEntries } from "./helpers/tokens"
 import { splitSystemFragments } from "./helpers/fragments"
 import { loadBaseline } from "./db"
+import { truncateLabel } from "./helpers/format"
 
 // ─── estimateTokens ───────────────────────────────────────────────────────────
 
@@ -177,5 +178,36 @@ describe("loadBaseline", () => {
     } finally {
       try { require("node:fs").unlinkSync(tmp) } catch { /* ignore */ }
     }
+  })
+})
+
+// ─── truncateLabel ─────────────────────────────────────────────────────────────
+
+describe("truncateLabel", () => {
+  it("pads short labels to maxLen", () => {
+    expect(truncateLabel("hi", 26)).toBe("hi" + " ".repeat(24))
+  })
+
+  it("returns exact-length label unchanged (no truncation)", () => {
+    const label = "a".repeat(26)
+    expect(truncateLabel(label, 26)).toBe(label)
+  })
+
+  it("truncates overflow labels with ellipsis", () => {
+    const label = "very_long_tool_name_that_overflows"
+    expect(label.length).toBeGreaterThan(26)
+    const result = truncateLabel(label, 26)
+    expect(result).toBe("very_long_tool_name_that_…")
+    expect(result.length).toBe(26)
+  })
+
+  it("uses default maxLen of 26", () => {
+    const result = truncateLabel("very_long_tool_name_that_overflows")
+    expect(result).toBe("very_long_tool_name_that_…")
+    expect(result.length).toBe(26)
+  })
+
+  it("handles empty string", () => {
+    expect(truncateLabel("", 26)).toBe(" ".repeat(26))
   })
 })

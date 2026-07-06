@@ -5,7 +5,7 @@ import { existsSync, readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { log } from "./helpers/debug"
 import { estimateTokens, rawPromptTokens, scaleEntries } from "./helpers/tokens"
-import { buildBar, fmt } from "./helpers/format"
+import { buildBar, fmt, truncateLabel } from "./helpers/format"
 import { loadBaseline } from "./db"
 import type { SystemFragment, SystemSnapshot, SystemSource } from "./types"
 import { makeScrollState } from "./shared/scroll"
@@ -782,7 +782,7 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                             <box flexDirection="column" gap={0}>
                               {top.map((entry, i) => (
                                 <text key={entry.label + i} fg={fg}>
-                                  {String(i + 1).padStart(2)}. {entry.label.padEnd(24)}{safeFmt(entry.tokens).padStart(10)} tokens
+                                  {String(i + 1).padStart(2)}. {truncateLabel(entry.label)}{safeFmt(entry.tokens).padStart(10)} tokens
                                 </text>
                               ))}
                             </box>
