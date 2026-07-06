@@ -1,5 +1,5 @@
 <!-- Change #issue with the issue it is related, if it applies -->
-Solves #issue1, #issue2, #issuen.
+Closes #issue1, #issue2, #issuen.
 
 ## 📋 Changelist Summary
 Small description of this PR.
