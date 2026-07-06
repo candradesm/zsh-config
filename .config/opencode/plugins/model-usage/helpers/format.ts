@@ -48,3 +48,17 @@ export function truncateLabel(label: string, maxLen: number = 26): string {
   if (label.length <= maxLen) return label.padEnd(maxLen)
   return label.slice(0, maxLen - 1) + "\u2026"
 }
+
+export function formatPercentDiff(current: number, previous: number | null): { arrow: string; text: string } {
+  if (previous == null || previous === 0) {
+    return { arrow: "\u2014", text: "\u2014" }
+  }
+  const diff = ((current - previous) / previous) * 100
+  if (diff > 0) {
+    return { arrow: "\u25b2", text: `+${Math.round(diff)}%` }
+  }
+  if (diff < 0) {
+    return { arrow: "\u25bc", text: `${Math.round(diff)}%` }
+  }
+  return { arrow: "\u2014", text: "\u2014" }
+}
