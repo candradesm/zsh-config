@@ -413,7 +413,7 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
               const outputTok: number = info.tokens?.output ?? 0
               const msgCost: number = info.cost ?? 0
               if (inputTok > 0 || cacheReadTok > 0 || outputTok > 0 || msgCost > 0) {
-                log("message.updated: msgId:", msgId, "session:", evtSID, "input:", inputTok, "cacheRead:", cacheReadTok, "output:", outputTok, "cost:", msgCost, "tokens:", JSON.stringify(info.tokens), "model:", info.modelID)
+                log("message.updated: msgId:", msgId, "session:", evtSID, "provider:", info.providerID, "model:", info.modelID, "input:", inputTok, "cacheRead:", cacheReadTok, "output:", outputTok, "cost:", msgCost, "tokens:", JSON.stringify(info.tokens))
               const prevSnapshot = processedAssistantMessages.get(msgId) ?? { input: 0, cacheRead: 0, output: 0, cost: 0 }
               const deltaInput = Math.max(0, inputTok - prevSnapshot.input)
               const deltaCacheRead = Math.max(0, cacheReadTok - prevSnapshot.cacheRead)
