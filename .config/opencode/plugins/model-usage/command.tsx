@@ -54,6 +54,7 @@ function loadDiskCache() {
       if (data.version === 2 && data.months) {
         usageCache = data as UsageCache
       }
+      // else: old format (version 1 or missing) — start fresh
     }
   } catch { /* ignore */ }
 }
