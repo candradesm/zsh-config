@@ -102,40 +102,134 @@ describe("splitSystemFragments", () => {
     expect(splitSystemFragments("   ")).toEqual([])
   })
 
-  it("splits on markdown headers", () => {
-    const text = "# Title\nbody1\n## Sub\nbody2\n# Another\nbody3"
+  it("does not split on markdown headers and merges them into a single fragment", () => {
+    const text = `Instructions from: /some/path/AGENTS.md
+### Organization & Checklist
+Some checklist text.
+### Basic Universal Rules
+Some basic rules.
+### Common Pitfalls to Avoid
+Some pitfalls.`
     const frags = splitSystemFragments(text)
-    expect(frags.length).toBe(3)
-    expect(frags.some((f) => f.label === "Title")).toBe(true)
-    expect(frags.some((f) => f.label === "Sub")).toBe(true)
-    expect(frags.some((f) => f.label === "Another")).toBe(true)
+    expect(frags.length).toBe(1)
+    expect(frags[0].label).toBe("/some/path/AGENTS.md")
   })
 
-  it("splits on jungle-mode 'Instructions from:' marker", () => {
-    const text = "Instructions from: jungle-mode/persona\npersona text\n\n\n# Env\nenv body"
+  it("splits on XML section markers correctly", () => {
+    const text = `<available_references>
+Some references here.
+</available_references>
+<mcp_instructions>
+Some instructions.
+</mcp_instructions>`
     const frags = splitSystemFragments(text)
+    expect(frags.length).toBe(2)
+    expect(frags.some((f) => f.label === "References")).toBe(true)
+    expect(frags.some((f) => f.label === "MCP Instructions")).toBe(true)
+  })
+
+  it("splits on non-jungle-mode 'Instructions from:' markers correctly", () => {
+    const text = `Instructions from: /path/to/one.md
+content one
+Instructions from: /path/to/two.md
+content two`
+    const frags = splitSystemFragments(text)
+    expect(frags.length).toBe(2)
+    expect(frags.some((f) => f.label === "/path/to/one.md")).toBe(true)
+    expect(frags.some((f) => f.label === "/path/to/two.md")).toBe(true)
+  })
+
+  it("terminates jungle-mode blocks at 2 consecutive blank lines and does not swallow subsequent content", () => {
+    const text = `Instructions from: jungle-mode/persona
+🍌 JUNGLE MODE ACTIVE 🍌
+You are Warrior Monke!
+
+
+Some unrelated content after the jungle-mode block ends.`
+    const frags = splitSystemFragments(text)
+    expect(frags.length).toBe(2)
     expect(frags.some((f) => f.label === "jungle-mode/persona")).toBe(true)
-    expect(frags.some((f) => f.label === "Env")).toBe(true)
+    expect(frags.some((f) => f.label === "Agent System Prompt")).toBe(true)
   })
 
-  it("buckets preamble before any header", () => {
-    const text = "preamble line\n# Header\nbody"
+  it("labels marker-less content at the very start as 'Agent System Prompt'", () => {
+    const text = `Some starting instructions without markers.
+## Header 1
+More info.
+# Header 2
+End of system prompt.
+
+Instructions from: /some/path.md
+Content here.`
     const frags = splitSystemFragments(text)
-    expect(frags.some((f) => f.label === "preamble")).toBe(true)
+    expect(frags.length).toBe(2)
+    expect(frags[0].label).toBe("Agent System Prompt")
+    expect(frags[1].label).toBe("/some/path.md")
+  })
+
+  it("labels marker-less content immediately following a terminated jungle-mode block as 'Agent System Prompt'", () => {
+    const text = `Instructions from: jungle-mode/persona
+🍌 JUNGLE MODE ACTIVE 🍌
+You are Warrior Monke!
+
+
+Unmarked text that continues after the jungle mode.`
+    const frags = splitSystemFragments(text)
+    const promptFrag = frags.find((f) => f.label === "Agent System Prompt")
+    expect(promptFrag).toBeDefined()
+    expect(promptFrag!.tokens).toBeGreaterThan(0)
+  })
+
+  it("merges other stray marker-less content gaps into a single 'Other' fragment with combined token count", () => {
+    const text = `<available_references>
+Ref contents
+</available_references>
+Stray content group one
+<mcp_instructions>
+MCP contents
+</mcp_instructions>
+Stray content group two
+<available_skills>
+Skill contents
+</available_skills>`
+    const frags = splitSystemFragments(text)
+    const otherFrag = frags.find((f) => f.label === "Other")
+    expect(otherFrag).toBeDefined()
+    expect(otherFrag!.tokens).toBe(12)
+    expect(frags.filter((f) => f.label === "Other").length).toBe(1)
+  })
+
+  it("has no 'Agent System Prompt' or 'Other' when document has zero marker-less content", () => {
+    const text = `<available_references>
+Ref contents
+</available_references>
+<available_skills>
+Skill contents
+</available_skills>`
+    const frags = splitSystemFragments(text)
+    expect(frags.some((f) => f.label === "Agent System Prompt")).toBe(false)
+    expect(frags.some((f) => f.label === "Other")).toBe(false)
   })
 
   it("caps to top-N + other", () => {
     let text = ""
-    for (let i = 0; i < 15; i++) text += `# Section ${i}\n${"x".repeat((i + 1) * 100)}\n`
+    for (let i = 0; i < 15; i++) {
+      text += `Instructions from: /path/${i}.md\n${"x".repeat((i + 1) * 100)}\n`
+    }
     const frags = splitSystemFragments(text, 10)
-    expect(frags.length).toBe(11) // 10 kept + "other"
+    expect(frags.length).toBe(11)
     expect(frags[frags.length - 1].label).toBe("other")
   })
 
   it("sorts by tokens descending", () => {
-    const text = "# Small\nab\n# Big\n" + "x".repeat(1000)
+    const text = `Instructions from: /path/small.md
+ab
+Instructions from: /path/big.md
+` + "x".repeat(1000)
     const frags = splitSystemFragments(text)
-    expect(frags[0].tokens).toBeGreaterThanOrEqual(frags[1].tokens)
+    expect(frags.length).toBe(2)
+    expect(frags[0].label).toBe("/path/big.md")
+    expect(frags[0].tokens).toBeGreaterThan(frags[1].tokens)
   })
 })
 

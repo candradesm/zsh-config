@@ -2,10 +2,10 @@ import type { SystemFragment } from "../types"
 import { estimateTokens } from "./tokens"
 
 /**
- * Split an assembled system prompt into labelled fragments by markdown header,
+ * Split an assembled system prompt into labelled fragments by
  * jungle-mode `Instructions from:` markers, and XML-like section blocks
  * (`<available_references>`, `<mcp_instructions>`, `<available_skills>`).
- * Each fragment's tokens are estimated with char/4.  Pure / testable.
+ * Each fragment's tokens are estimated with char/4. Pure / testable.
  */
 export function splitSystemFragments(systemText: string, maxFragments = 100): SystemFragment[] {
   if (!systemText || systemText.trim().length === 0) return []
@@ -16,6 +16,9 @@ export function splitSystemFragments(systemText: string, maxFragments = 100): Sy
   let xmlCloseTag = ""
   let pluginMode = false
   let pluginBlankCount = 0
+
+  let hasCreatedAnyBucket = false
+  let afterJungleMode = false
 
   // Top-level XML sections in the assembled system prompt (system.ts,
   // skill.ts). Only these three tags start a new fragment; inner tags
@@ -28,7 +31,9 @@ export function splitSystemFragments(systemText: string, maxFragments = 100): Sy
   }
 
   const push = () => {
-    if (current && current.text.trim().length > 0) buckets.push(current)
+    if (current && current.text.trim().length > 0) {
+      buckets.push(current)
+    }
     current = null
   }
 
@@ -55,6 +60,7 @@ export function splitSystemFragments(systemText: string, maxFragments = 100): Sy
         if (pluginBlankCount >= 2) {
           push()
           pluginMode = false
+          afterJungleMode = true
         }
       } else {
         pluginBlankCount = 0
@@ -68,6 +74,8 @@ export function splitSystemFragments(systemText: string, maxFragments = 100): Sy
       const tag = xmlMatch[1]
       push()
       current = { label: friendlyLabel[tag] ?? tag.replace(/_/g, " "), text: line + "\n" }
+      hasCreatedAnyBucket = true
+      afterJungleMode = false
       xmlCloseTag = `</${tag}>`
       if (line.includes(xmlCloseTag)) {
         push()
@@ -77,14 +85,14 @@ export function splitSystemFragments(systemText: string, maxFragments = 100): Sy
       continue
     }
 
-    const header = /^(#{1,3})\s+(.+)$/.exec(line)
     const jungle = /^Instructions from:\s*(.+)$/.exec(line)
-    if (header) {
+    if (jungle) {
       push()
-      current = { label: header[2].trim().slice(0, 48), text: line + "\n" }
-    } else if (jungle) {
-      push()
-      current = { label: jungle[1].trim().slice(0, 48), text: line + "\n" }
+      const rawLabel = jungle[1].trim()
+      const label = rawLabel.length > 48 ? rawLabel.slice(0, 47) + "…" : rawLabel
+      current = { label, text: line + "\n" }
+      hasCreatedAnyBucket = true
+      afterJungleMode = false
       // Only enter plugin mode for jungle-mode injections (collect until
       // double blank line). Other Instructions from: lines (e.g. AGENTS.md
       // file references) are regular section headers — don't swallow their
@@ -96,16 +104,45 @@ export function splitSystemFragments(systemText: string, maxFragments = 100): Sy
     } else if (current) {
       current.text += line + "\n"
     } else {
-      // Preamble before any header — bucket as "preamble".
-      current = { label: "preamble", text: line + "\n" }
+      // current is null. This is a marker-less line.
+      let label = ""
+      if (!hasCreatedAnyBucket) {
+        label = "Agent System Prompt"
+        hasCreatedAnyBucket = true
+      } else if (afterJungleMode) {
+        label = "Agent System Prompt"
+        afterJungleMode = false
+      } else {
+        label = "other_markerless"
+      }
+      current = { label, text: line + "\n" }
     }
   }
   push()
 
-  const frags: SystemFragment[] = buckets.map((b) => ({
-    label: b.label || "section",
-    tokens: estimateTokens(b.text),
-  }))
+  const frags: SystemFragment[] = []
+  let otherMarkerlessTokens = 0
+
+  for (const b of buckets) {
+    const tokens = estimateTokens(b.text)
+    if (tokens <= 0) continue
+
+    if (b.label === "other_markerless") {
+      otherMarkerlessTokens += tokens
+    } else {
+      frags.push({
+        label: b.label || "section",
+        tokens,
+      })
+    }
+  }
+
+  if (otherMarkerlessTokens > 0) {
+    frags.push({
+      label: "Other",
+      tokens: otherMarkerlessTokens,
+    })
+  }
 
   if (frags.length <= maxFragments) return frags.sort((a, b) => b.tokens - a.tokens)
 

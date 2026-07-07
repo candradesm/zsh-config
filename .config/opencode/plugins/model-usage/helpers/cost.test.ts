@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test"
-import { getCacheReadPrice, splitCost } from "./cost"
+import { getCacheReadPrice, splitCost, calcCacheHitRate } from "./cost"
 
 // ─── getCacheReadPrice ─────────────────────────────────────────────────────────
 
@@ -483,5 +483,44 @@ describe("token accumulation logic", () => {
     expect(totalCacheRead).toBe(60000)
     expect(totalNonCachedInput).toBe(0)
     expect(Math.round(totalCacheRead / (totalCacheRead + totalNonCachedInput) * 100)).toBe(100) // 100% cache hit
+  })
+})
+
+// ─── calcCacheHitRate ──────────────────────────────────────────────────────────
+
+describe("calcCacheHitRate", () => {
+  it("returns null when both inputs are 0", () => {
+    expect(calcCacheHitRate(0, 0)).toBeNull()
+  })
+
+  it("returns 0 when cacheRead is 0 and nonCachedInput is positive", () => {
+    expect(calcCacheHitRate(0, 100)).toBe(0)
+    expect(calcCacheHitRate(0, 1)).toBe(0)
+  })
+
+  it("returns 100 when nonCachedInput is 0 and cacheRead is positive", () => {
+    expect(calcCacheHitRate(100, 0)).toBe(100)
+    expect(calcCacheHitRate(1, 0)).toBe(100)
+  })
+
+  it("returns 50 when cacheRead equals nonCachedInput", () => {
+    expect(calcCacheHitRate(50, 50)).toBe(50)
+    expect(calcCacheHitRate(1000, 1000)).toBe(50)
+  })
+
+  it("rounds to nearest integer", () => {
+    // 1 / 3 ≈ 33.333% → 33
+    expect(calcCacheHitRate(1, 2)).toBe(33)
+    // 2 / 3 ≈ 66.666% → 67
+    expect(calcCacheHitRate(2, 1)).toBe(67)
+  })
+
+  it("handles rounding behavior at a boundary that rounds to .5", () => {
+    // 1 / 200 * 100 = 0.5% → rounds to 1%
+    expect(calcCacheHitRate(1, 199)).toBe(1)
+    // 3 / 200 * 100 = 1.5% → rounds to 2%
+    expect(calcCacheHitRate(3, 197)).toBe(2)
+    // 1 / 202 * 100 ≈ 0.495% → rounds to 0%
+    expect(calcCacheHitRate(1, 201)).toBe(0)
   })
 })

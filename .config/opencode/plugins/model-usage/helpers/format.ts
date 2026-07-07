@@ -48,3 +48,15 @@ export function truncateLabel(label: string, maxLen: number = 26): string {
   if (label.length <= maxLen) return label.padEnd(maxLen)
   return label.slice(0, maxLen - 1) + "\u2026"
 }
+
+/**
+ * Compact "k"-suffixed formatting for large deltas.
+ * E.g., fmtCompact(45230) -> "45k", fmtCompact(999) -> "999",
+ * fmtCompact(-1500) -> "-2k". Rounds to nearest thousand, keeps sign.
+ */
+export function fmtCompact(n: number): string {
+  if (Math.abs(n) < 1000) {
+    return String(n)
+  }
+  return `${Math.round(n / 1000)}k`
+}
