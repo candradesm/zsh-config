@@ -149,6 +149,6 @@ export function splitSystemFragments(systemText: string, maxFragments = 100): Sy
   const sorted = frags.sort((a, b) => b.tokens - a.tokens)
   const kept = sorted.slice(0, maxFragments)
   const otherTotal = sorted.slice(maxFragments).reduce((s, f) => s + f.tokens, 0)
-  if (otherTotal > 0) kept.push({ label: "other", tokens: otherTotal })
+  if (otherTotal > 0) kept.push({ label: "… more", tokens: otherTotal })
   return kept
 }

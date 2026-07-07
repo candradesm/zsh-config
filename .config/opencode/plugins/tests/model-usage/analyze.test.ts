@@ -1,9 +1,10 @@
 import { describe, expect, it } from "bun:test"
-import { estimateTokens, estimateVisibleOutputTokens, rawPromptTokens, scaleEntries } from "./helpers/tokens"
-import { aggregateModelStats } from "./helpers/models"
-import { splitSystemFragments } from "./helpers/fragments"
-import { loadBaseline } from "./db"
-import { truncateLabel } from "./helpers/format"
+import { estimateTokens, estimateVisibleOutputTokens, rawPromptTokens, scaleEntries } from "@model-usage/helpers/tokens"
+import { aggregateModelStats } from "@model-usage/helpers/models"
+import type { ModelUsageRecord } from "@model-usage/helpers/models"
+import { splitSystemFragments } from "@model-usage/helpers/fragments"
+import { loadBaseline } from "@model-usage/db"
+import { truncateLabel } from "@model-usage/helpers/format"
 
 // ─── estimateTokens ───────────────────────────────────────────────────────────
 
@@ -219,7 +220,7 @@ Skill contents
     }
     const frags = splitSystemFragments(text, 10)
     expect(frags.length).toBe(11)
-    expect(frags[frags.length - 1].label).toBe("other")
+    expect(frags[frags.length - 1].label).toBe("… more")
   })
 
   it("sorts by tokens descending", () => {

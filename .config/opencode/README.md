@@ -34,26 +34,27 @@ Sidebar widget, `/usage` monthly breakdown, and `/analyze` per-session context b
 - **Persistent cache** — past months saved to disk for instant recall
 
 **`/analyze` command (`Ctrl+Shift+A`):** Per-session context token breakdown for the open session. Categorises every message part into SYSTEM / USER / ASSISTANT / TOOLS / REASONING.
-- **Tabbed layout** — `←` `→` (or `h` `l`) to switch between Context, Per-Tool, System, and Top tabs.
+- **Tabbed layout** — `←` `→` (or `h` `l`) to switch between Context, Per-Tool, System, Models, and Extra Info tabs.
   - **Context:** all categories with percentage bars and session total.
   - **Per-Tool:** tool-level token breakdown (output + call arguments) grouped by tool name.
-  - **System:** per-fragment system token breakdown (agent prompt, instructions, env, skills, MCP, refs, jungle persona…). System fragments are split from the assembled prompt via markdown headers, XML section tags, and jungle-mode plugin injection boundaries. The tab only appears when the system has ≥2 fragments.
-  - **Top:** top-10 contributors across all categories.
+  - **System:** per-fragment system token breakdown (agent prompt, instructions, env, skills, MCP, refs, jungle persona…). System fragments are split from the assembled prompt via `Instructions from:` markers, XML section tags (`<available_references>`, `<mcp_instructions>`, `<available_skills>`), and jungle-mode plugin injection boundaries (detected by double-blank-line separators after jungle-mode persona blocks). Marker-less content at the start of the prompt is labelled "Agent System Prompt"; other stray marker-less content is merged into "Other". The tab only appears when the system has ≥2 fragments.
+   - **Models:** (conditional, when >1 model used) per-model `↑ input ↓ output cache X% % tokens $cost` breakdown with `msgCount` and usage bars. Sorted by token usage (input+output, mirroring /usage).
+   - **Extra Info:** (always visible, replaces former Top tab) Top Contributors, Session cost, Compaction events (with token reduction estimates where computable), Model switches (per-model message counts), and Unusually large messages (hotspot detection — USER/TOOLS categories, >2x category median, capped at 5, expandable via digit keys 1-5 or mouse click).
 - **System tokens (tiered, provider-agnostic):**
   1. **Tier 1 — baseline DB** (V2 native runner): reads `session_context_epoch.baseline` from `opencode.db`, the exact assembled system text. Tokenised with char/4.
   2. **Tier 2 — telemetry** (when Tier 1 is unavailable, provider-agnostic): reconstitutes the raw prompt from the first assistant with `tokens.input > 0` as `raw = input + cache.read + cache.write`, then `system = raw − conversation_before`. Only used when `cache.read === 0` (clean first call); works for opencode-go, Copilot, Anthropic, Bedrock, OpenAI.
   3. **Tier 3 — server plugin** (contaminated/compacted): char/4 from `system-tokens.json` when telemetry is contaminated (`cache.read > 0`, e.g. resumed sessions) or the session was compacted. Shown with ⚠.
   4. **Tier 4** — no data; SYSTEM omitted.
 - **Breakdown scaling:** when a Tier 1/2 total is available AND server fragments exist, fragments are scaled proportionally to sum to the authoritative total (current composition, exact total).
-- **Raw visor** — `v` on the System tab toggles the full assembled system prompt text (up to 50,000 chars).
+- **Raw visor** — `v` on the System tab toggles the full assembled system prompt text (up to 50,000 chars). `c` copies the raw text to the OS clipboard with a "copied!" flash confirmation.
 - **Auto-poll** — background reload every 60s so the dialog stays in sync as the conversation grows. No data is cleared or scroll reset on background fetches.
 - **Scroll** — `↑` `↓` (or `j` `k`) with overflow hints (`▲` / `▼`)
 - **Reload** — `r` to re-fetch and recalculate (use mid-conversation to watch the breakdown update as the session grows)
 
-**Files:** `plugins/model-usage.tsx`, `plugins/model-usage-server.ts`, `plugins/model-usage/` (analyze, command, sidebar, db, helpers/, shared/, quota, types)
+**Files:** `plugins/model-usage.tsx`, `plugins/model-usage-server.ts`, `plugins/model-usage/` (analyze, command, sidebar, db, helpers/ — tokens, models, cost, compaction, hotspots, clipboard, format, fragments, debug, dates; shared/ — keys, scroll; quota, types)
 **Requires:** `GITHUB_TOKEN` (for Copilot quota), `OPENCODE_GO_WORKSPACE_ID` + `OPENCODE_GO_AUTH_COOKIE` (for Go quota)
 **Debug:** `OPENCODE_COPILOT_DEBUG=true` to enable logs (written to `plugins/logs/`)
-**Tests:** `bun test plugins/model-usage/analyze.test.ts`
+**Tests:** `bun test plugins/tests/model-usage/`
 
 ### notifications (Server)
 
@@ -105,11 +106,15 @@ Desktop notifications for session events.
 ├── plugins/
 │   ├── jungle-mode.tsx              # TUI: jungle-mode UI components
 │   ├── jungle-mode-server.ts        # Server: chat.message hook for jungle persona injection
-│   ├── jungle-mode/                 # Sub-modules (persona, types, UI fragments)
+│   ├── jungle-mode/                 # Sub-modules (persona, command, prompt-indicator, types)
 │   ├── model-usage.tsx              # TUI: usage sidebar + /usage + /analyze commands
-│   ├── model-usage-server.ts        # Server: system prompt capture (experimental.chat.system.transform)
+│   ├── model-usage-server.ts        # Server: system prompt capture
 │   ├── model-usage.config.json      # Model multipliers + deprecated
-│   ├── model-usage/                 # Sub-modules (analyze, command, sidebar, db, helpers, quota, types)
+│   ├── model-usage/                 # Sub-modules (analyze, command, sidebar, db, helpers/, shared/, quota, types)
+│   ├── tests/                       # Plugin test suites (not installed to ~/.config/)
+│   │   ├── tsconfig.json
+│   │   ├── model-usage/
+│   │   └── jungle-mode/
 │   ├── notifications.ts             # Server: Desktop notifications
 │   ├── notifications.config.jsonc   # Notification settings
 │   └── logs/                        # Debug logs (gitignored)
@@ -123,5 +128,5 @@ Desktop notifications for session events.
 
 ## Installation
 
-Files are copied from this repo's `.config/opencode/` to `~/.config/opencode/` during setup.
+Files are copied from this repo's `.config/opencode/` to `~/.config/opencode/` during setup (see root README). Plugin test suites under `plugins/tests/` co-locate with their plugins for development convenience.
 See [root README](../../README.md) for installation instructions.

@@ -1,3 +1,5 @@
+import { PREVIEW_MAX_LEN } from "./format"
+
 /**
  * Hotspots helper module.
  * Utilities to compute statistical medians and detect token usage hotspots across categories.
@@ -87,7 +89,7 @@ export function detectHotspots(
  * characters with an ellipsis if it overflows. Falls back to a trimmed
  * prefix of `fallbackText` when `title` is missing/empty.
  */
-export function pickPreview(fallbackText: string, title?: string, maxLen = 70): string {
+export function pickPreview(fallbackText: string, title?: string, maxLen = PREVIEW_MAX_LEN): string {
   const chosen = (title && title.trim().length > 0) ? title : fallbackText
   const trimmed = chosen.trim()
   if (trimmed.length > maxLen) {
@@ -105,7 +107,7 @@ export function pickPreview(fallbackText: string, title?: string, maxLen = 70): 
 export function summarizeToolInput(
   toolName: string,
   input: Record<string, unknown> | undefined | null
-): string | null {
+): { value: string; key: string } | null {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     return null
   }
@@ -113,7 +115,7 @@ export function summarizeToolInput(
   for (const key of priorityKeys) {
     const value = input[key]
     if (typeof value === "string") {
-      return value
+      return { value, key }
     }
   }
   return null

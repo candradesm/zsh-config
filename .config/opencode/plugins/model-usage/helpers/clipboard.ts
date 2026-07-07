@@ -53,9 +53,10 @@ export function resolveClipboardCandidates(platform: NodeJS.Platform): Clipboard
 // ─── OSC 52 Formatting ────────────────────────────────────────────────────────
 
 /**
- * Pure: builds the raw OSC 52 escape sequence string for writing `text` to the system clipboard
- * via terminal escape codes (base64-encoded payload). Mirror the exact format used by
- * packages/tui/src/clipboard.ts (including tmux-passthrough wrapping if that file does it).
+ * Builds the OSC 52 escape sequence. Format follows OpenCode's packages/tui/src/clipboard.ts
+ * for the escape sequence itself (base64, 'c' target, BEL terminator, tmux/screen wrapping).
+ * The darwin native path (pbcopy preferred, stdin-based osascript fallback) and OSC 52
+ * timing (fallback-only, not fired-first) are intentional divergences.
  */
 export function buildOsc52Sequence(text: string): string {
   const sequence = `\x1b]52;c;${Buffer.from(text).toString("base64")}\x07`
@@ -97,10 +98,20 @@ function tryCommand(cmd: string, args: string[], text: string): Promise<boolean>
 }
 
 /**
+ * Pure: returns whether the current process output is a TTY, which determines
+ * whether writing an OSC 52 escape sequence is appropriate (non-TTY streams
+ * would emit garbage). Extracted for testability.
+ */
+export function shouldTryOsc52(isTTY: boolean): boolean {
+  return isTTY
+}
+
+/**
  * Impure orchestrator: tries each resolveClipboardCandidates(process.platform) command in order
  * (spawn, write `text` to stdin, wait for exit code 0 = success); on ALL failures, falls back to
- * writing buildOsc52Sequence(text) to process.stdout and returns true (best-effort, can't confirm
- * OSC52 success). Returns false only if something genuinely throws un-catchably.
+ * writing buildOsc52Sequence(text) to process.stdout when isTTY (returns true, best-effort, can't
+ * confirm OSC52 success). Returns false if native commands fail and stdout is not a TTY (OSC 52
+ * would emit garbage).
  */
 export async function writeClipboard(text: string): Promise<boolean> {
   try {
@@ -112,9 +123,12 @@ export async function writeClipboard(text: string): Promise<boolean> {
       }
     }
     // Fallback to OSC 52
-    const oscSequence = buildOsc52Sequence(text)
-    process.stdout.write(oscSequence)
-    return true
+    if (shouldTryOsc52(process.stdout.isTTY)) {
+      const oscSequence = buildOsc52Sequence(text)
+      process.stdout.write(oscSequence)
+      return true
+    }
+    return false  // non-TTY, OSC 52 won't work
   } catch {
     return false
   }

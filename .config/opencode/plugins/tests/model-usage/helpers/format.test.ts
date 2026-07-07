@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test"
-import { fmtCompact } from "./format"
+import { fmtCompact } from "@model-usage/helpers/format"
 
 // ─── fmtCompact ──────────────────────────────────────────────────────────────
 

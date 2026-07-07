@@ -1,3 +1,5 @@
+const MS_PER_DAY = 86_400_000
+
 export function getMonthInfo(year?: number, month?: number): { startMs: number; endMs: number; label: string } {
   const now = new Date()
   const y = year ?? now.getUTCFullYear()
@@ -12,4 +14,25 @@ export function isCurrentMonth(startMs: number): boolean {
   const now = new Date()
   const currentStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)
   return startMs === currentStart
+}
+
+export function getWeekMonday(date: Date): Date {
+  const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()))
+  const day = d.getUTCDay()
+  const diff = day === 0 ? 6 : day - 1
+  d.setUTCDate(d.getUTCDate() - diff)
+  d.setUTCHours(0, 0, 0, 0)
+  return d
+}
+
+export function getWeekInfo(date: Date): { startMs: number; endMs: number; label: string } {
+  const monday = getWeekMonday(date)
+  const startMs = monday.getTime()
+  const endMs = startMs + 7 * MS_PER_DAY
+
+  const startLabel = monday.toLocaleString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })
+  const sunday = new Date(endMs - 1)
+  const endLabel = sunday.toLocaleString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })
+
+  return { startMs, endMs, label: `${startLabel} – ${endLabel}` }
 }

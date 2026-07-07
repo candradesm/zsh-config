@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test"
-import { resolveClipboardCandidates, buildOsc52Sequence } from "./clipboard"
+import { resolveClipboardCandidates, buildOsc52Sequence } from "@model-usage/helpers/clipboard"
 
 // ─── resolveClipboardCandidates ──────────────────────────────────────────────
 

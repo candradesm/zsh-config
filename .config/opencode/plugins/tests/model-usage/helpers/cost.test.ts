@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test"
-import { getCacheReadPrice, splitCost, calcCacheHitRate } from "./cost"
+import { getCacheReadPrice, splitCost, calcCacheHitRate } from "@model-usage/helpers/cost"
 
 // ─── getCacheReadPrice ─────────────────────────────────────────────────────────
 

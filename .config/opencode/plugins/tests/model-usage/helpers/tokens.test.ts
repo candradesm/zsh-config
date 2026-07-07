@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test"
-import { estimateVisibleOutputTokens } from "./tokens"
+import { estimateVisibleOutputTokens } from "@model-usage/helpers/tokens"
 
 describe("estimateVisibleOutputTokens", () => {
   it("handles null, undefined, or empty parts gracefully", () => {

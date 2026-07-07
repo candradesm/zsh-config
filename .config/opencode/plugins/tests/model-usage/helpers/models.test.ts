@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test"
-import { aggregateModelStats } from "./models"
-import type { ModelUsageRecord, ModelStat } from "./models"
+import { aggregateModelStats } from "@model-usage/helpers/models"
+import type { ModelUsageRecord, ModelStat } from "@model-usage/helpers/models"
 
 // ─── aggregateModelStats ─────────────────────────────────────────────────────
 

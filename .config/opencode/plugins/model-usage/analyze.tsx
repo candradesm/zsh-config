@@ -5,11 +5,12 @@ import { existsSync, readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { log } from "./helpers/debug"
 import { estimateTokens, rawPromptTokens, scaleEntries, estimateVisibleOutputTokens } from "./helpers/tokens"
-import { buildBar, fmt, truncateLabel, fmtCompact, fmtCost } from "./helpers/format"
+import { buildBar, fmt, truncateLabel, fmtCompact, fmtCost, PREVIEW_MAX_LEN } from "./helpers/format"
 import { writeClipboard } from "./helpers/clipboard"
-import { summarizeCompactions } from "./helpers/compaction"
-import type { CompactionEvent, CompactionSummary } from "./helpers/compaction"
+import { resolveCompactionEvents } from "./helpers/compaction"
+import type { CompactionSummary } from "./helpers/compaction"
 import { detectHotspots, pickPreview, summarizeToolInput, shortenPath } from "./helpers/hotspots"
+import { computeModelsTabLayout, countModelSwitches } from "./helpers/model-tab"
 import type { HotspotCandidate, HotspotResult } from "./helpers/hotspots"
 import { aggregateModelStats } from "./helpers/models"
 import type { ModelUsageRecord, ModelStat } from "./helpers/models"
@@ -236,13 +237,12 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
               let reasoningCounter = 0
 
               const modelUsageRecords: ModelUsageRecord[] = []
-              const compactionEvents: CompactionEvent[] = []
               const userCandidates: HotspotCandidate[] = []
               const toolsCandidates: HotspotCandidate[] = []
 
               const makePreview = (text: string) => {
                 const trimmed = text.trim()
-                return trimmed.length > 60 ? trimmed.slice(0, 60).trim() + "…" : trimmed
+                return trimmed.length > PREVIEW_MAX_LEN ? trimmed.slice(0, PREVIEW_MAX_LEN).trim() + "…" : trimmed
               }
               const makeFullText = (text: string) => {
                 return text.length > 5000 ? text.slice(0, 5000) + "\n\n… (truncated at 5000 chars)" : text
@@ -259,6 +259,7 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
               // the Tier 2 telemetry subtraction. A title-generator assistant
               // (tokens.input === 0) is skipped.
               let firstNonzeroAssistant: any = null
+              // sessionWasCompacted derived from resolveCompactionEvents after the loop
               let sessionWasCompacted = false
               // Per-message telemetry sum for reasoning tokens (provider-reported,
               // exact). Used to scale the REASONING category's char/4 entries.
@@ -278,21 +279,6 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
 
                 // Check for compaction part (signals a compaction summary message)
                 const hasCompaction = parts.some((p: any) => p.type === "compaction")
-                if (hasCompaction) {
-                  sessionWasCompacted = true
-                  const userSoFar = userEntries.reduce((s, e) => s + e.tokens, 0)
-                  const assistantSoFar = assistantEntries.reduce((s, e) => s + e.tokens, 0)
-                  const toolSoFar = Array.from(toolMap.values()).reduce((a, b) => a + b, 0)
-                  const reasoningSoFar = reasoningEntries.reduce((s, e) => s + e.tokens, 0)
-                  const beforeTokens = userSoFar + assistantSoFar + toolSoFar + reasoningSoFar
-
-                  const textParts = parts.filter((p: any) => p.type === "text")
-                  const compactionText = textParts.map((p: any) => p.text ?? "").join("")
-                  const afterTokens = estimateTokens(compactionText)
-
-                  compactionEvents.push({ beforeTokens, afterTokens })
-                  log("analyze: compaction event captured: before =", beforeTokens, "after =", afterTokens)
-                }
 
                 // ── Model Usage Records Ledger (Genuine full ledger, all assistant messages) ──
                 if (info.role === "assistant") {
@@ -443,12 +429,13 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                         (toolMap.get(toolName) ?? 0) + tokensCount,
                       )
                       let previewTitle: string | undefined = undefined
-                      const summarizedInput = summarizeToolInput(toolName, part.state?.input)
-                      if (summarizedInput !== null) {
-                        if (summarizedInput.includes("/") || summarizedInput.includes("\\")) {
-                          previewTitle = shortenPath(summarizedInput, 2)
+                      const inputResult = summarizeToolInput(toolName, part.state?.input)
+                      if (inputResult !== null) {
+                        const pathLikeKeys = ["filePath", "path", "pattern"]
+                        if (pathLikeKeys.includes(inputResult.key) && (inputResult.value.includes("/") || inputResult.value.includes("\\"))) {
+                          previewTitle = shortenPath(inputResult.value, 2)
                         } else {
-                          previewTitle = summarizedInput
+                          previewTitle = inputResult.value
                         }
                       } else {
                         const rawTitle = part.state?.title
@@ -510,6 +497,20 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                     }
                   }
                 }
+              }
+
+              // ── Resolve compaction events ─────────────────────────────────
+              // Pure function extracts compaction events from the raw message
+              // stream, resolving before/after tokens from adjacent assistant
+              // rawPromptTokens. Multi-consecutive-compaction limitation doc:
+              // if two compactions happen with no assistant between them, the
+              // second compaction's `before` reuses the first's prior assistant
+              // value (stale). This is rare and acceptable.
+              const { events: resolvedCompactionEvents, summary: resolvedCompactionSummary } = resolveCompactionEvents(messages)
+              if (resolvedCompactionEvents.length > 0) {
+                sessionWasCompacted = true
+                setCompactionSummary(resolvedCompactionSummary)
+                log("analyze: compaction summary:", JSON.stringify(resolvedCompactionSummary))
               }
 
               // ── Build categories ──────────────────────────────────────────
@@ -677,25 +678,7 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
               setModelStats(stats)
 
               // ── Compute sequential model switches ──
-              let seqSwitches = 0
-              let lastModelKey = ""
-              for (const record of modelUsageRecords) {
-                const modelKey = `${record.providerID}/${record.modelID}`
-                if (lastModelKey && lastModelKey !== modelKey) {
-                  seqSwitches++
-                }
-                lastModelKey = modelKey
-              }
-              setSwitchesCount(seqSwitches)
-
-              // ── Set compaction summary ──
-              if (compactionEvents.length > 0) {
-                const summary = summarizeCompactions(compactionEvents)
-                setCompactionSummary(summary)
-                log("analyze: compaction summary:", JSON.stringify(summary))
-              } else {
-                setCompactionSummary(null)
-              }
+              setSwitchesCount(countModelSwitches(messages))
 
               // ── Compute session cost ──
               const totalCost = modelUsageRecords.reduce((acc, r) => acc + r.cost, 0)
@@ -1015,32 +998,21 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                       }
 
                       // ── Models tab ────────────────────────────────────
+                      //
+                      // Design note (deliberate trade-off): using input+output for
+                      // % means a cold-cache-switch model can legitimately outrank
+                      // a workhorse model on token usage (those tokens WERE billed).
+                      // The `msgCount` counterbalances this. Reasoning-only models
+                      // (o1-style, input=0, output=0, reasoning>0) will show 0% —
+                      // mirroring /usage which also excludes reasoning from its SQL.
+                      // Accepted edge case.
                       if (tab.id === "models") {
                         const stats = modelStats()
                         if (stats.length === 0) {
                           return <text fg={muted}>No model usage data.</text>
                         }
 
-                        // NOTE on Visible Assistant Output Share (%) (referred to as share in UI) and Output (↓) tokens:
-                        // We use `visibleOutputTokens` (char/4 visible text) for sorting, displaying ↓,
-                        // and computing visible assistant output share (%) rather than raw billed (input + output) tokens.
-                        // 1. Raw `inputTokens` are highly skewed by provider prompt-cache mechanics.
-                        //    When model/provider switches, cache resets to 0 (cold cache), charging the next
-                        //    model for the ENTIRE prior conversation history as input tokens.
-                        // 2. Raw `outputTokens` are contaminated by tool-call JSON payloads (e.g. large file
-                        //    writes/edits/diffs), which are already tracked in the TOOLS category.
-                        // Using `visibleOutputTokens` makes the percentage immune to prompt cache invalidation
-                        // tax and consistent with content produced in ASSISTANT messages.
-                        const totalVisibleOutputAcrossAllModels = stats.reduce((acc, st) => acc + st.visibleOutputTokens, 0)
-                        const sortedStats = [...stats].sort((a, b) => {
-                          if (b.visibleOutputTokens !== a.visibleOutputTokens) {
-                            return b.visibleOutputTokens - a.visibleOutputTokens
-                          }
-                          // Fallback to total billed tokens if visible output tokens are equal
-                          const totalA = a.inputTokens + a.outputTokens
-                          const totalB = b.inputTokens + b.outputTokens
-                          return totalB - totalA
-                        })
+                        const { sortedStats, totalModelTokens } = computeModelsTabLayout(stats)
 
                         return (
                           <box paddingBottom={1}>
@@ -1048,7 +1020,8 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                             <text> </text>
                             <box flexDirection="column" gap={1}>
                               {sortedStats.map((m, i) => {
-                                const pct = totalVisibleOutputAcrossAllModels > 0 ? (m.visibleOutputTokens / totalVisibleOutputAcrossAllModels) * 100 : 0
+                                const modelTokens = m.inputTokens + m.outputTokens
+                                const pct = totalModelTokens > 0 ? (modelTokens / totalModelTokens) * 100 : 0
                                 const hitRate = calcCacheHitRate(m.cacheRead, m.inputTokens)
 
                                 const parts = [
@@ -1058,7 +1031,7 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                                 if (hitRate !== null) {
                                   parts.push(`cache ${hitRate}%`)
                                 }
-                                parts.push(`${pct.toFixed(1)}% output share`)
+                                parts.push(`${pct.toFixed(1)}% tokens`)
                                 if (m.cost > 0) {
                                   parts.push(fmtCost(m.cost))
                                 }
@@ -1066,7 +1039,7 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
 
                                 return (
                                   <box key={m.providerID + "/" + m.modelID} flexDirection="column" gap={1}>
-                                    <text fg={fg}>{i + 1}. {m.providerID} / {m.modelID}</text>
+                                    <text fg={fg}>{i + 1}. {m.providerID} / {m.modelID}  ·  {m.msgCount} msgs</text>
                                     <text fg={muted}>{infoLine}</text>
                                     <text fg={fg}>{buildBar(pct, 50)}</text>
                                   </box>
@@ -1115,12 +1088,14 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                             {/* c) Compactions */}
                             {(() => {
                               if (!comp || comp.count === 0) return null
+                              const reductionText = comp.reductionTokens > 0 ? `, -${fmtCompact(comp.reductionTokens)} tokens` : ""
+                              const pendingCount = comp.count - comp.measured
+                              const pendingText = pendingCount > 0 && pendingCount < comp.count ? ` (${pendingCount} pending)` : ""
                               return (
                                 <box flexDirection="column" gap={0}>
                                   <text> </text>
                                   <text fg={fg}>
-                                    <b>Compactions</b>: {comp.count}
-                                    {comp.reductionTokens > 0 ? `, -${fmtCompact(comp.reductionTokens)} tokens` : ""}
+                                    <b>Compactions</b>: {comp.count}{reductionText}{pendingText}
                                   </text>
                                 </box>
                               )

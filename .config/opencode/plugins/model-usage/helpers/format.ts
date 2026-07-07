@@ -1,3 +1,6 @@
+/** Maximum character length for message previews in hotspot UI. */
+export const PREVIEW_MAX_LEN = 40
+
 export function fmt(n: number): string {
   return n.toLocaleString("en-US")
 }
@@ -59,4 +62,18 @@ export function fmtCompact(n: number): string {
     return String(n)
   }
   return `${Math.round(n / 1000)}k`
+}
+
+export function formatPercentDiff(current: number, previous: number | null): { arrow: string; text: string } {
+  if (previous == null || previous === 0) {
+    return { arrow: "\u2014", text: "\u2014" }
+  }
+  const diff = ((current - previous) / previous) * 100
+  if (diff > 0) {
+    return { arrow: "\u25b2", text: `+${Math.round(diff)}%` }
+  }
+  if (diff < 0) {
+    return { arrow: "\u25bc", text: `${Math.round(diff)}%` }
+  }
+  return { arrow: "\u2014", text: "\u2014" }
 }

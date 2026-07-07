@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test"
-import { median, detectHotspots, summarizeToolInput, shortenPath, type HotspotCandidate } from "./hotspots"
+import { median, detectHotspots, summarizeToolInput, shortenPath, type HotspotCandidate } from "@model-usage/helpers/hotspots"
 
 // ─── median ──────────────────────────────────────────────────────────────────
 
@@ -188,37 +188,37 @@ describe("summarizeToolInput", () => {
 
   it("respects key priority order: filePath beats path", () => {
     const input = { filePath: "src/main.ts", path: "src/other.ts" }
-    expect(summarizeToolInput("someTool", input)).toBe("src/main.ts")
+    expect(summarizeToolInput("someTool", input)).toEqual({ value: "src/main.ts", key: "filePath" })
   })
 
   it("respects key priority order: path beats pattern", () => {
     const input = { path: "src/main.ts", pattern: "*.ts" }
-    expect(summarizeToolInput("someTool", input)).toBe("src/main.ts")
+    expect(summarizeToolInput("someTool", input)).toEqual({ value: "src/main.ts", key: "path" })
   })
 
   it("respects key priority order: pattern beats command", () => {
     const input = { pattern: "*.ts", command: "echo test" }
-    expect(summarizeToolInput("someTool", input)).toBe("*.ts")
+    expect(summarizeToolInput("someTool", input)).toEqual({ value: "*.ts", key: "pattern" })
   })
 
   it("respects key priority order: command beats url", () => {
     const input = { command: "echo test", url: "https://example.com" }
-    expect(summarizeToolInput("someTool", input)).toBe("echo test")
+    expect(summarizeToolInput("someTool", input)).toEqual({ value: "echo test", key: "command" })
   })
 
   it("respects key priority order: url beats description", () => {
     const input = { url: "https://example.com", description: "Useful site" }
-    expect(summarizeToolInput("someTool", input)).toBe("https://example.com")
+    expect(summarizeToolInput("someTool", input)).toEqual({ value: "https://example.com", key: "url" })
   })
 
   it("respects key priority order: description beats prompt", () => {
     const input = { description: "Useful site", prompt: "Summarize this" }
-    expect(summarizeToolInput("someTool", input)).toBe("Useful site")
+    expect(summarizeToolInput("someTool", input)).toEqual({ value: "Useful site", key: "description" })
   })
 
   it("respects key priority order: prompt is returned when only prompt is present", () => {
     const input = { prompt: "Summarize this" }
-    expect(summarizeToolInput("someTool", input)).toBe("Summarize this")
+    expect(summarizeToolInput("someTool", input)).toEqual({ value: "Summarize this", key: "prompt" })
   })
 
   it("skips non-string values and falls through to next priority key", () => {
@@ -228,7 +228,7 @@ describe("summarizeToolInput", () => {
       pattern: "src/**/*.ts", // string, return this
       command: "npm test"
     }
-    expect(summarizeToolInput("someTool", input as any)).toBe("src/**/*.ts")
+    expect(summarizeToolInput("someTool", input as any)).toEqual({ value: "src/**/*.ts", key: "pattern" })
   })
 
   it("returns null when no matching priority keys are present", () => {
@@ -238,8 +238,8 @@ describe("summarizeToolInput", () => {
 
   it("is unaffected by the toolName parameter", () => {
     const input = { command: "npm test" }
-    expect(summarizeToolInput("toolA", input)).toBe("npm test")
-    expect(summarizeToolInput("toolB", input)).toBe("npm test")
+    expect(summarizeToolInput("toolA", input)).toEqual({ value: "npm test", key: "command" })
+    expect(summarizeToolInput("toolB", input)).toEqual({ value: "npm test", key: "command" })
   })
 })
 
