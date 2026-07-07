@@ -300,16 +300,50 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                   const providerID = asstInfo.providerID
                   const modelID = asstInfo.modelID
                   if (providerID && modelID) {
-                    modelUsageRecords.push({
-                      providerID,
-                      modelID,
-                      inputTokens: asstInfo.tokens?.input ?? 0,
-                      outputTokens: asstInfo.tokens?.output ?? 0,
-                      cacheRead: asstInfo.tokens?.cache?.read ?? 0,
-                      cacheWrite: asstInfo.tokens?.cache?.write ?? 0,
-                      cost: asstInfo.cost ?? 0,
-                      visibleOutputTokens: estimateVisibleOutputTokens(parts),
+                    // Compute the reconstructed raw prompt size for this individual call.
+                    // This is provider-agnostic, restoring the cache counters subtracted by OpenCode.
+                    const currentRawPrompt = rawPromptTokens({
+                      input: asstInfo.tokens?.input ?? 0,
+                      cache: {
+                        read: asstInfo.tokens?.cache?.read ?? 0,
+                        write: asstInfo.tokens?.cache?.write ?? 0,
+                      },
                     })
+
+                    // Skip degenerate zero-telemetry records entirely (e.g. aborted/interrupted/stub calls)
+                    // so they do not count toward message counts or overwrite valid raw prompt token statistics.
+                    const hasTelemetry = currentRawPrompt > 0 || (asstInfo.tokens?.output ?? 0) > 0 || (asstInfo.tokens?.reasoning ?? 0) > 0 || (asstInfo.cost ?? 0) > 0
+
+                    const partCounts: Record<string, number> = {}
+                    for (const p of parts) {
+                      const t = p.type || "unknown"
+                      partCounts[t] = (partCounts[t] || 0) + 1
+                    }
+                    const hasNonEmptyTextPart = parts.some((p: any) => p.type === "text" && typeof p.text === "string" && p.text.length > 0)
+                    const visibleOutputTokens = estimateVisibleOutputTokens(parts)
+
+                    log(
+                      `[ledger diagnostic] msgId: ${msgId} | providerID/modelID: ${providerID}/${modelID} | rawTokens: ${JSON.stringify(asstInfo.tokens ?? {})} | cost: ${asstInfo.cost ?? 0} | currentRawPrompt: ${currentRawPrompt} | hasTelemetry: ${hasTelemetry} | action: ${hasTelemetry ? "pushed" : "skipped"} | partsBreakdown: ${JSON.stringify(partCounts)} | hasNonEmptyTextPart: ${hasNonEmptyTextPart} | visibleOutputTokens: ${visibleOutputTokens}`
+                    )
+
+                    if (hasTelemetry) {
+                      modelUsageRecords.push({
+                        providerID,
+                        modelID,
+                        inputTokens: asstInfo.tokens?.input ?? 0,
+                        outputTokens: asstInfo.tokens?.output ?? 0,
+                        cacheRead: asstInfo.tokens?.cache?.read ?? 0,
+                        cacheWrite: asstInfo.tokens?.cache?.write ?? 0,
+                        cost: asstInfo.cost ?? 0,
+                        visibleOutputTokens: visibleOutputTokens,
+                        // We track the raw prompt size per call. When aggregated, we only keep the
+                        // chronologically last call's raw prompt size (not the sum of raw prompts across turns).
+                        // This avoids the double-counting trap where the same accumulated context gets counted on
+                        // every single turn, and reflects the true scale of the conversation's active state.
+                        // This mirrors the Tier-2 SYSTEM resolution's use of a single representative raw prompt.
+                        lastCallRawPromptTokens: currentRawPrompt,
+                      })
+                    }
                   }
                 }
 
@@ -629,6 +663,17 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
 
               // ── Aggregate and set model stats ──
               const stats = aggregateModelStats(modelUsageRecords)
+              log("analyze: final aggregated model stats: " + JSON.stringify(stats.map(s => ({
+                "providerID/modelID": `${s.providerID}/${s.modelID}`,
+                msgCount: s.msgCount,
+                inputTokens: s.inputTokens,
+                outputTokens: s.outputTokens,
+                cacheRead: s.cacheRead,
+                cacheWrite: s.cacheWrite,
+                cost: s.cost,
+                visibleOutputTokens: s.visibleOutputTokens,
+                lastCallRawPromptTokens: s.lastCallRawPromptTokens
+              }))))
               setModelStats(stats)
 
               // ── Compute sequential model switches ──
@@ -1007,7 +1052,7 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                                 const hitRate = calcCacheHitRate(m.cacheRead, m.inputTokens)
 
                                 const parts = [
-                                  `↑ ${fmt(m.inputTokens)}`,
+                                  `↑ ${fmt(m.lastCallRawPromptTokens ?? m.inputTokens)}`,
                                   `↓ ${fmt(m.visibleOutputTokens)}`
                                 ]
                                 if (hitRate !== null) {

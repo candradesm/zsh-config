@@ -395,3 +395,326 @@ describe("Models Tab Token Share Regression Test", () => {
     expect(modelBStat.outputTokens).toBe(10000)
   })
 })
+
+// ─── Models Tab Input Tokens Last-Value-Wins Regression Test ──────────────────
+
+describe("Models Tab Input Tokens Last-Value-Wins Regression Test", () => {
+  it("verifies that input token display for warm-cache workhorse modelA is not dwarfed by cold-cache switch modelB", () => {
+    // 1. Simulate modelA (workhorse): 10 turns, growing warm cache, small input deltas.
+    const modelARecords: ModelUsageRecord[] = []
+    for (let i = 0; i < 10; i++) {
+      const inputTokens = 1000 + i * 100 // 1000 to 1900
+      const cacheRead = 20000 + i * 6000 // 20000 to 74000
+      const cacheWrite = 0
+      
+      const currentRawPrompt = rawPromptTokens({
+        input: inputTokens,
+        cache: { read: cacheRead, write: cacheWrite }
+      })
+
+      modelARecords.push({
+        providerID: "anthropic",
+        modelID: "claude-3-5-sonnet",
+        inputTokens,
+        outputTokens: 200,
+        cacheRead,
+        cacheWrite,
+        cost: 0.001,
+        visibleOutputTokens: 150,
+        lastCallRawPromptTokens: currentRawPrompt,
+      })
+    }
+
+    // 2. Simulate modelB (minority switched-in model): 2 turns.
+    // First turn: massive input spike from cold cache switch.
+    // Second turn: some cache read recovery, smaller input.
+    const modelBRecords: ModelUsageRecord[] = [
+      {
+        providerID: "openai",
+        modelID: "gpt-4o",
+        inputTokens: 75000,
+        outputTokens: 300,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: 0.005,
+        visibleOutputTokens: 20,
+        lastCallRawPromptTokens: rawPromptTokens({
+          input: 75000,
+          cache: { read: 0, write: 0 }
+        })
+      },
+      {
+        providerID: "openai",
+        modelID: "gpt-4o",
+        inputTokens: 15000,
+        outputTokens: 400,
+        cacheRead: 60000,
+        cacheWrite: 0,
+        cost: 0.003,
+        visibleOutputTokens: 30,
+        lastCallRawPromptTokens: rawPromptTokens({
+          input: 15000,
+          cache: { read: 60000, write: 0 }
+        })
+      }
+    ]
+
+    // Combine records
+    const allRecords = [...modelARecords, ...modelBRecords]
+
+    // Aggregate stats per model group (just like analyze.tsx does)
+    const stats = aggregateModelStats(allRecords)
+    const modelAStat = stats.find(s => s.modelID === "claude-3-5-sonnet")!
+    const modelBStat = stats.find(s => s.modelID === "gpt-4o")!
+
+    expect(modelAStat).toBeDefined()
+    expect(modelBStat).toBeDefined()
+
+    // Old Buggy Logic: Summed input tokens per model (Σ tokens.input)
+    // modelA's summed input is small because of the warm cache hit rate (each turn only pays for delta).
+    // modelB's summed input has a huge spike from the cold cache model switch.
+    const oldInputDisplayA = modelAStat.inputTokens // sum of modelA inputTokens
+    const oldInputDisplayB = modelBStat.inputTokens // sum of modelB inputTokens
+
+    // Assert that under the old buggy logic, modelB's summed input would incorrectly show a MUCH larger number than modelA's
+    // modelA input sum = 1000 + 1100 + ... + 1900 = 14500
+    // modelB input sum = 75000 + 15000 = 90000
+    expect(oldInputDisplayA).toBe(14500)
+    expect(oldInputDisplayB).toBe(90000)
+    expect(oldInputDisplayB).toBeGreaterThan(oldInputDisplayA)
+
+    // New Correct Logic: Display lastCallRawPromptTokens (using last call raw prompt size)
+    // modelA last call: input=1900, cacheRead=74000 -> lastCallRawPromptTokens = 75900
+    // modelB last call: input=15000, cacheRead=60000 -> lastCallRawPromptTokens = 75000
+    const newInputDisplayA = modelAStat.lastCallRawPromptTokens
+    const newInputDisplayB = modelBStat.lastCallRawPromptTokens
+
+    // Assert that under the new correct logic:
+    // - modelA's display reflects its own last call's reconstructed raw prompt size (which is sizable, reflecting the full conversation scale)
+    expect(newInputDisplayA).toBe(75900)
+
+    // - modelB's display reflects only ITS last call's reconstructed size, NOT the inflated first-call spike, and NOT a sum of both calls
+    expect(newInputDisplayB).toBe(75000)
+    expect(newInputDisplayB).not.toBe(150000) // not sum of both calls' reconstructed prompt tokens
+    expect(newInputDisplayB).not.toBe(90000) // not sum of input tokens
+    expect(newInputDisplayB).not.toBe(75000 + 75000) // not summed reconstructed prompt tokens
+
+    // - The input display comparison now reflects the correct relative context weight
+    expect(newInputDisplayA).toBeGreaterThan(newInputDisplayB!)
+  })
+})
+
+// ─── Models Tab Degenerate Last Call Regression Test ───────────────────
+
+describe("Models Tab Degenerate Last Call Regression Test", () => {
+  it("reproduces the real-world scenario of a compaction-adjacent stub/aborted call with all-zero telemetry and verifies it doesn't clobber the first model's raw prompt tokens, while tracking a second model with ongoing usage", () => {
+    // We simulate the exact processing loop found in analyze.tsx (~lines 298-335)
+    
+    // Define our simulated message stream
+    const sessionMessages: any[] = [
+      // Turn 1: Gemini-3.5-Flash has real call
+      {
+        id: "msg_gemini_1",
+        info: {
+          role: "assistant",
+          providerID: "google",
+          modelID: "gemini-3.5-flash",
+          tokens: {
+            input: 10000,
+            output: 200,
+            cache: { read: 5000, write: 0 },
+          },
+          cost: 0.001,
+        },
+        parts: [{ type: "text", text: "Gemini response one." }],
+      },
+      // Turn 2: Gemini-3.5-Flash has second real call
+      {
+        id: "msg_gemini_2",
+        info: {
+          role: "assistant",
+          providerID: "google",
+          modelID: "gemini-3.5-flash",
+          tokens: {
+            input: 12000,
+            output: 300,
+            cache: { read: 8000, write: 0 },
+          },
+          cost: 0.0015,
+        },
+        parts: [{ type: "text", text: "Gemini response two." }],
+      },
+      // Turn 3: A compaction-adjacent stub/aborted call with all-zero telemetry as Gemini's chronologically LAST occurrence.
+      // This has tokens.input=0, tokens.output=0, cache.read=0, cache.write=0, cost=0.
+      {
+        id: "msg_gemini_stub",
+        info: {
+          role: "assistant",
+          providerID: "google",
+          modelID: "gemini-3.5-flash",
+          tokens: {
+            input: 0,
+            output: 0,
+            cache: { read: 0, write: 0 },
+          },
+          cost: 0,
+        },
+        parts: [], // no real telemetry or visible text
+      },
+      // Turn 4: A second model ("claude-sonnet-5") with real ongoing usage after the compaction
+      {
+        id: "msg_claude_1",
+        info: {
+          role: "assistant",
+          providerID: "anthropic",
+          modelID: "claude-sonnet-5",
+          tokens: {
+            input: 15000,
+            output: 500,
+            cache: { read: 12000, write: 0 },
+          },
+          cost: 0.004,
+        },
+        parts: [{ type: "text", text: "Claude response one." }],
+      }
+    ]
+
+    // Simulate analyze.tsx parser building modelUsageRecords
+    const modelUsageRecords: any[] = []
+
+    for (const msg of sessionMessages) {
+      const info = msg.info
+      if (info.role !== "assistant" && info.role !== "user") continue
+      const parts: any[] = msg.parts ?? []
+
+      if (info.role === "assistant") {
+        const asstInfo = info
+        const providerID = asstInfo.providerID
+        const modelID = asstInfo.modelID
+        if (providerID && modelID) {
+          const currentRawPrompt = rawPromptTokens({
+            input: asstInfo.tokens?.input ?? 0,
+            cache: {
+              read: asstInfo.tokens?.cache?.read ?? 0,
+              write: asstInfo.tokens?.cache?.write ?? 0,
+            },
+          })
+
+          const hasTelemetry = currentRawPrompt > 0 || (asstInfo.tokens?.output ?? 0) > 0 || (asstInfo.tokens?.reasoning ?? 0) > 0 || (asstInfo.cost ?? 0) > 0
+
+          if (hasTelemetry) {
+            modelUsageRecords.push({
+              providerID,
+              modelID,
+              inputTokens: asstInfo.tokens?.input ?? 0,
+              outputTokens: asstInfo.tokens?.output ?? 0,
+              cacheRead: asstInfo.tokens?.cache?.read ?? 0,
+              cacheWrite: asstInfo.tokens?.cache?.write ?? 0,
+              cost: asstInfo.cost ?? 0,
+              visibleOutputTokens: estimateVisibleOutputTokens(parts),
+              lastCallRawPromptTokens: currentRawPrompt,
+            })
+          }
+        }
+      }
+    }
+
+    // Now aggregate using aggregateModelStats()
+    const stats = aggregateModelStats(modelUsageRecords)
+
+    // We should have stats for both models
+    const geminiStat = stats.find(s => s.modelID === "gemini-3.5-flash")!
+    const claudeStat = stats.find(s => s.modelID === "claude-sonnet-5")!
+
+    expect(geminiStat).toBeDefined()
+    expect(claudeStat).toBeDefined()
+
+    // Assert that the first model's (Gemini) ↑ figure (lastCallRawPromptTokens) reflects its real prior usage (NOT zero)
+    // Real prior last call was msg_gemini_2: input=12000, cacheRead=8000 -> raw = 20000.
+    expect(geminiStat.lastCallRawPromptTokens).toBe(20000)
+
+    // Assert that its msgCount is 2 (the stub call is excluded completely because hasTelemetry is false)
+    expect(geminiStat.msgCount).toBe(2)
+
+    // Assert that its cacheRead and cost remain correct (not broken, but let's verify)
+    // input = 10000 + 12000 = 22000
+    // cacheRead = 5000 + 8000 = 13000
+    // cost = 0.001 + 0.0015 = 0.0025
+    expect(geminiStat.inputTokens).toBe(22000)
+    expect(geminiStat.cacheRead).toBe(13000)
+    expect(geminiStat.cost).toBe(0.0025)
+
+    // Assert that the second model (Claude) has the correct stats
+    // Claude last call: input=15000, cacheRead=12000 -> raw = 27000
+    expect(claudeStat.lastCallRawPromptTokens).toBe(27000)
+    expect(claudeStat.msgCount).toBe(1)
+    expect(claudeStat.inputTokens).toBe(15000)
+    expect(claudeStat.cacheRead).toBe(12000)
+    expect(claudeStat.cost).toBe(0.004)
+  })
+
+  it("retains a record with reasoning tokens > 0 even if input=0, output=0, and cost=0", () => {
+    const sessionMessages: any[] = [
+      {
+        id: "msg_reasoning_only",
+        info: {
+          role: "assistant",
+          providerID: "openai",
+          modelID: "o1-mini",
+          tokens: {
+            input: 0,
+            output: 0,
+            reasoning: 450,
+            cache: { read: 0, write: 0 },
+          },
+          cost: 0,
+        },
+        parts: [],
+      }
+    ]
+
+    const modelUsageRecords: any[] = []
+
+    for (const msg of sessionMessages) {
+      const info = msg.info
+      if (info.role !== "assistant" && info.role !== "user") continue
+      const parts: any[] = msg.parts ?? []
+
+      if (info.role === "assistant") {
+        const asstInfo = info
+        const providerID = asstInfo.providerID
+        const modelID = asstInfo.modelID
+        if (providerID && modelID) {
+          const currentRawPrompt = rawPromptTokens({
+            input: asstInfo.tokens?.input ?? 0,
+            cache: {
+              read: asstInfo.tokens?.cache?.read ?? 0,
+              write: asstInfo.tokens?.cache?.write ?? 0,
+            },
+          })
+
+          const hasTelemetry = currentRawPrompt > 0 || (asstInfo.tokens?.output ?? 0) > 0 || (asstInfo.tokens?.reasoning ?? 0) > 0 || (asstInfo.cost ?? 0) > 0
+
+          if (hasTelemetry) {
+            modelUsageRecords.push({
+              providerID,
+              modelID,
+              inputTokens: asstInfo.tokens?.input ?? 0,
+              outputTokens: asstInfo.tokens?.output ?? 0,
+              cacheRead: asstInfo.tokens?.cache?.read ?? 0,
+              cacheWrite: asstInfo.tokens?.cache?.write ?? 0,
+              cost: asstInfo.cost ?? 0,
+              visibleOutputTokens: estimateVisibleOutputTokens(parts),
+              lastCallRawPromptTokens: currentRawPrompt,
+            })
+          }
+        }
+      }
+    }
+
+    const stats = aggregateModelStats(modelUsageRecords)
+    expect(stats.length).toBe(1)
+    expect(stats[0].modelID).toBe("o1-mini")
+    expect(stats[0].msgCount).toBe(1)
+  })
+})
