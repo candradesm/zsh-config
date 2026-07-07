@@ -63,6 +63,55 @@ export function queryUsage(dbPath: string, startMs: number, endMs: number): Usag
   }
 }
 
+export interface RawUsageRow {
+  time_created: number
+  model_id: string | null
+  provider_id: string | null
+  cost: number
+  input_tokens: number
+  output_tokens: number
+}
+
+export function fetchRawRows(dbPath: string, startMs: number, endMs: number): RawUsageRow[] | { error: string } {
+  let db: Database | null = null
+  try {
+    db = new Database(dbPath, { readonly: true })
+
+    const rows = db
+      .query(
+        `SELECT 
+           time_created,
+           json_extract(data, '$.modelID') AS model_id,
+           json_extract(data, '$.providerID') AS provider_id,
+           CAST(json_extract(data, '$.cost') AS REAL) AS cost,
+           CAST(json_extract(data, '$.tokens.input') AS INTEGER) AS input_tokens,
+           CAST(json_extract(data, '$.tokens.output') AS INTEGER) AS output_tokens
+         FROM message
+         WHERE json_extract(data, '$.role') = 'assistant'
+           AND time_created >= ?
+           AND time_created < ?
+         ORDER BY time_created ASC`,
+      )
+      .all(startMs, endMs) as RawUsageRow[]
+
+    db.close()
+    db = null
+
+    return (rows ?? []).map((r: RawUsageRow) => ({
+      time_created: r.time_created,
+      model_id: r.model_id ?? null,
+      provider_id: r.provider_id ?? null,
+      cost: r.cost ?? 0,
+      input_tokens: r.input_tokens ?? 0,
+      output_tokens: r.output_tokens ?? 0,
+    }))
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) }
+  } finally {
+    try { db?.close() } catch { /* ignore */ }
+  }
+}
+
 export function getEarliestUsageDate(dbPath: string): number | null {
   let db: Database | null = null
   try {
