@@ -1,6 +1,25 @@
+import type { Part } from "@opencode-ai/sdk/v2"
+import { log } from "./debug"
+
 export function estimateTokens(text: string): number {
   if (!text || text.length === 0) return 0
   return Math.ceil(text.length / 4)
+}
+
+/**
+ * Estimates the visible assistant text token count from message parts using char/4.
+ * Excludes tool calls/results and other non-text parts to stay consistent with ASSISTANT category.
+ */
+export function estimateVisibleOutputTokens(parts: readonly Part[] | undefined | null): number {
+  if (!parts) {
+    log("estimateVisibleOutputTokens: no parts provided, returning 0")
+    return 0
+  }
+  const textParts = parts.filter((p) => p?.type === "text")
+  const text = textParts.map((p) => p?.text ?? "").join("")
+  const estimated = estimateTokens(text)
+  log(`estimateVisibleOutputTokens: textParts count = ${textParts.length}, combined length = ${text.length} chars, estimated visible tokens = ${estimated}`)
+  return estimated
 }
 
 /**

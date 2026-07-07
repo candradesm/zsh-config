@@ -1,6 +1,15 @@
 import { Database } from "bun:sqlite"
 import type { ModelUsage, UsageRow, UsageData } from "./types"
 
+export interface RawUsageRow {
+  time_created: number
+  model_id: string | null
+  provider_id: string | null
+  cost: number
+  input_tokens: number
+  output_tokens: number
+}
+
 const MAX_MODELS = 10
 
 export function queryUsage(dbPath: string, startMs: number, endMs: number): UsageData | { error: string } {
@@ -43,8 +52,8 @@ export function queryUsage(dbPath: string, startMs: number, endMs: number): Usag
         totalOutput += out
         totalCost += cost
         return {
-          providerId: r.provider_id,
-          modelId: r.model_id,
+          providerID: r.provider_id,
+          modelID: r.model_id,
           totalCost: cost,
           totalInput: inp,
           totalOutput: out,
@@ -61,15 +70,6 @@ export function queryUsage(dbPath: string, startMs: number, endMs: number): Usag
       /* already closed */
     }
   }
-}
-
-export interface RawUsageRow {
-  time_created: number
-  model_id: string | null
-  provider_id: string | null
-  cost: number
-  input_tokens: number
-  output_tokens: number
 }
 
 export function fetchRawRows(dbPath: string, startMs: number, endMs: number): RawUsageRow[] | { error: string } {

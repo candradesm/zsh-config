@@ -21,8 +21,8 @@ export interface GoQuotaInfo {
 }
 
 export interface ModelUsage {
-  providerId: string
-  modelId: string
+  providerID: string
+  modelID: string
   totalCost: number
   totalInput: number
   totalOutput: number

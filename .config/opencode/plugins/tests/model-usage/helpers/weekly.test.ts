@@ -23,7 +23,6 @@ interface RawUsageRow {
 }
 
 interface DayBucket {
-  /** UTC ms at start of the day (00:00:00.000) */
   dayMs: number
   totalInput: number
   totalOutput: number
@@ -32,7 +31,6 @@ interface DayBucket {
 }
 
 interface WeekBucket {
-  /** UTC ms at start of the Monday of this week (00:00:00.000) */
   startMs: number
   label: string
   totalInput: number
@@ -50,8 +48,7 @@ function getUTCDayStart(ts: number): number {
 
 function getWeekMonday(ts: number): number {
   const d = new Date(ts)
-  const day = d.getUTCDay() // 0=Sun, 1=Mon, ..., 6=Sat
-  // Days since Monday: if Sunday (0), go back 6 days; otherwise go back (day - 1)
+  const day = d.getUTCDay()
   const offset = day === 0 ? 6 : day - 1
   const monday = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - offset))
   return Date.UTC(monday.getUTCFullYear(), monday.getUTCMonth(), monday.getUTCDate())
@@ -123,7 +120,7 @@ function bucketByWeek(rows: RawUsageRow[]): WeekBucket[] {
 // ─── Tests: bucketByDay ────────────────────────────────────────────────────────
 
 describe("bucketByDay", () => {
-  const REFERENCE = Date.UTC(2026, 6, 6, 12, 0, 0) // Jul 6 2026 12:00 UTC (Mon)
+  const REFERENCE = Date.UTC(2026, 6, 6, 12, 0, 0)
 
   it("single message produces 1 day bucket with correct totals", () => {
     const rows: RawUsageRow[] = [
@@ -152,9 +149,9 @@ describe("bucketByDay", () => {
   })
 
   it("messages across 3 days produce 3 day buckets", () => {
-    const day1 = Date.UTC(2026, 6, 6, 10, 0, 0) // Mon Jul 6
-    const day2 = Date.UTC(2026, 6, 7, 10, 0, 0) // Tue Jul 7
-    const day3 = Date.UTC(2026, 6, 8, 10, 0, 0) // Wed Jul 8
+    const day1 = Date.UTC(2026, 6, 6, 10, 0, 0)
+    const day2 = Date.UTC(2026, 6, 7, 10, 0, 0)
+    const day3 = Date.UTC(2026, 6, 8, 10, 0, 0)
 
     const rows: RawUsageRow[] = [
       { time_created: day1, model_id: "gpt-4", provider_id: "copilot", total_cost: 0.05, total_input: 100, total_output: 50 },
@@ -166,7 +163,6 @@ describe("bucketByDay", () => {
     expect(result[0].count).toBe(1)
     expect(result[1].count).toBe(1)
     expect(result[2].count).toBe(1)
-    // Verify ascending order
     expect(result[0].dayMs).toBeLessThan(result[1].dayMs)
     expect(result[1].dayMs).toBeLessThan(result[2].dayMs)
   })
@@ -176,10 +172,8 @@ describe("bucketByDay", () => {
 
 describe("bucketByWeek", () => {
   it("messages across 2 ISO weeks produce 2 week buckets", () => {
-    // Week 1: Mon Jul 6 – Sun Jul 12
-    // Week 2: Mon Jul 13 – Sun Jul 19
-    const week1 = Date.UTC(2026, 6, 8, 12, 0, 0) // Wed Jul 8 (week 1)
-    const week2 = Date.UTC(2026, 6, 15, 12, 0, 0) // Wed Jul 15 (week 2)
+    const week1 = Date.UTC(2026, 6, 8, 12, 0, 0)
+    const week2 = Date.UTC(2026, 6, 15, 12, 0, 0)
 
     const rows: RawUsageRow[] = [
       { time_created: week1, model_id: "gpt-4", provider_id: "copilot", total_cost: 0.05, total_input: 100, total_output: 50 },
@@ -187,13 +181,13 @@ describe("bucketByWeek", () => {
     ]
     const result = bucketByWeek(rows)
     expect(result).toHaveLength(2)
-    expect(result[0].startMs).toBe(Date.UTC(2026, 6, 6)) // Jul 6 Mon
-    expect(result[1].startMs).toBe(Date.UTC(2026, 6, 13)) // Jul 13 Mon
+    expect(result[0].startMs).toBe(Date.UTC(2026, 6, 6))
+    expect(result[1].startMs).toBe(Date.UTC(2026, 6, 13))
   })
 
   it('cross-month week: messages on Jun 29 (Mon) and Jul 5 (Sun) → 1 week bucket "Jun 29 – Jul 5"', () => {
-    const jun29 = Date.UTC(2026, 5, 29, 10, 0, 0) // Mon Jun 29
-    const jul5 = Date.UTC(2026, 6, 5, 14, 0, 0) // Sun Jul 5
+    const jun29 = Date.UTC(2026, 5, 29, 10, 0, 0)
+    const jul5 = Date.UTC(2026, 6, 5, 14, 0, 0)
 
     const rows: RawUsageRow[] = [
       { time_created: jun29, model_id: "gpt-4", provider_id: "copilot", total_cost: 0.05, total_input: 100, total_output: 50 },
@@ -201,7 +195,7 @@ describe("bucketByWeek", () => {
     ]
     const result = bucketByWeek(rows)
     expect(result).toHaveLength(1)
-    expect(result[0].startMs).toBe(Date.UTC(2026, 5, 29)) // Jun 29 Mon
+    expect(result[0].startMs).toBe(Date.UTC(2026, 5, 29))
     expect(result[0].label).toBe("Jun 29 – Jul 5")
     expect(result[0].days).toHaveLength(2)
     expect(result[0].totalInput).toBe(300)
@@ -210,19 +204,16 @@ describe("bucketByWeek", () => {
   })
 
   it("verify week Monday ownership: a message on Jul 5 buckets into the week starting Jun 29", () => {
-    // Jul 5 2026 is a Sunday (day 0)
     const jul5 = Date.UTC(2026, 6, 5, 12, 0, 0)
     const rows: RawUsageRow[] = [
       { time_created: jul5, model_id: "gpt-4", provider_id: "copilot", total_cost: 0.05, total_input: 100, total_output: 50 },
     ]
     const result = bucketByWeek(rows)
     expect(result).toHaveLength(1)
-    // Sunday belongs to the week that started on the previous Monday (Jun 29)
     expect(result[0].startMs).toBe(Date.UTC(2026, 5, 29))
   })
 
   it("verify cost aggregation across days and weeks", () => {
-    // 3 messages over 2 weeks with different costs
     const rows: RawUsageRow[] = [
       { time_created: Date.UTC(2026, 6, 6, 10, 0, 0), model_id: "gpt-4", provider_id: "copilot", total_cost: 0.10, total_input: 500, total_output: 250 },
       { time_created: Date.UTC(2026, 6, 7, 10, 0, 0), model_id: "claude-3", provider_id: "anthropic", total_cost: 0.05, total_input: 200, total_output: 100 },
@@ -232,13 +223,11 @@ describe("bucketByWeek", () => {
     const weeks = bucketByWeek(rows)
     expect(weeks).toHaveLength(2)
 
-    // Week 1 (Jul 6 - Jul 12): 2 messages
-    expect(weeks[0].totalInput).toBe(700) // 500 + 200
-    expect(weeks[0].totalOutput).toBe(350) // 250 + 100
-    expect(weeks[0].totalCost).toBeCloseTo(0.15, 6) // 0.10 + 0.05
+    expect(weeks[0].totalInput).toBe(700)
+    expect(weeks[0].totalOutput).toBe(350)
+    expect(weeks[0].totalCost).toBeCloseTo(0.15, 6)
     expect(weeks[0].days).toHaveLength(2)
 
-    // Week 2 (Jul 13 - Jul 19): 1 message
     expect(weeks[1].totalInput).toBe(1000)
     expect(weeks[1].totalOutput).toBe(500)
     expect(weeks[1].totalCost).toBeCloseTo(0.20, 6)

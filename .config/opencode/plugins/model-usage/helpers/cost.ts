@@ -54,3 +54,14 @@ export function getCacheReadPrice(modelId: string, provider: readonly Provider[]
   }
   return 0
 }
+
+/**
+ * Calculates the cache hit rate percentage.
+ * Returns null when both inputs are 0 to avoid division by zero.
+ */
+export function calcCacheHitRate(cacheRead: number, nonCachedInput: number): number | null {
+  if (cacheRead === 0 && nonCachedInput === 0) {
+    return null
+  }
+  return Math.round((cacheRead / (cacheRead + nonCachedInput)) * 100)
+}

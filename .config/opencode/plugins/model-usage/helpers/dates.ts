@@ -19,7 +19,6 @@ export function isCurrentMonth(startMs: number): boolean {
 export function getWeekMonday(date: Date): Date {
   const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()))
   const day = d.getUTCDay()
-  // ISO week: Monday is start. getUTCDay(): 0=Sun, 1=Mon...6=Sat
   const diff = day === 0 ? 6 : day - 1
   d.setUTCDate(d.getUTCDate() - diff)
   d.setUTCHours(0, 0, 0, 0)

@@ -4,8 +4,18 @@ import { onMount, onCleanup, createSignal, createMemo } from "solid-js"
 import { existsSync, readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { log } from "./helpers/debug"
-import { estimateTokens, rawPromptTokens, scaleEntries } from "./helpers/tokens"
-import { buildBar, fmt, truncateLabel } from "./helpers/format"
+import { estimateTokens, rawPromptTokens, scaleEntries, estimateVisibleOutputTokens } from "./helpers/tokens"
+import { buildBar, fmt, truncateLabel, fmtCompact, fmtCost, PREVIEW_MAX_LEN } from "./helpers/format"
+import { writeClipboard } from "./helpers/clipboard"
+import { resolveCompactionEvents } from "./helpers/compaction"
+import type { CompactionSummary } from "./helpers/compaction"
+import { detectHotspots, pickPreview, summarizeToolInput, shortenPath } from "./helpers/hotspots"
+import { computeModelsTabLayout, countModelSwitches } from "./helpers/model-tab"
+import type { HotspotCandidate, HotspotResult } from "./helpers/hotspots"
+import { aggregateModelStats } from "./helpers/models"
+import type { ModelUsageRecord, ModelStat } from "./helpers/models"
+import { calcCacheHitRate } from "./helpers/cost"
+import { splitSystemFragments } from "./helpers/fragments"
 import { loadBaseline } from "./db"
 import type { SystemFragment, SystemSnapshot, SystemSource } from "./types"
 import { makeScrollState } from "./shared/scroll"
@@ -30,6 +40,10 @@ interface Category {
   name: string
   entries: CategoryEntry[]
   totalTokens: number
+}
+
+interface FormattedHotspotResult extends HotspotResult {
+  formattedRatio: string
 }
 
 export function registerAnalyzeCommand(api: TuiPluginApi) {
@@ -92,9 +106,17 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
           const [activeTab, setActiveTab] = createSignal(0)
           const [showRaw, setShowRaw] = createSignal(false)
           const [rawSystemText, setRawSystemText] = createSignal("")
+          const [modelStats, setModelStats] = createSignal<ModelStat[]>([])
+          const [switchesCount, setSwitchesCount] = createSignal<number>(0)
+          const [compactionSummary, setCompactionSummary] = createSignal<CompactionSummary | null>(null)
+          const [sessionCost, setSessionCost] = createSignal<number>(0)
+          const [hotspotResults, setHotspotResults] = createSignal<FormattedHotspotResult[]>([])
+          const [expandedHotspotIndex, setExpandedHotspotIndex] = createSignal<number | null>(null)
+          const [copiedFlash, setCopiedFlash] = createSignal<boolean>(false)
 
           let pollInterval: any = null
           let cleanupKeyLayer: (() => void) | null = null
+          let copiedTimeout: any = null
           const scroll = makeScrollState(createSignal)
           const loadGuard = createLoadGuard()
 
@@ -106,7 +128,8 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
             if (hasToolsSection()) t.push({ id: "tools", label: "Per-Tool" })
             const sysCat = categories().find((c: Category) => c.name.startsWith("SYSTEM"))
             if (sysCat && sysCat.entries.length >= 2) t.push({ id: "system", label: "System" })
-            if (topContributors().length > 0) t.push({ id: "top", label: "Top" })
+            if (modelStats().length > 1) t.push({ id: "models", label: "Models" })
+            t.push({ id: "extra", label: "Extra Info" })
             return t
           })
 
@@ -213,6 +236,19 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
               let userCounter = 0
               let assistantCounter = 0
               let reasoningCounter = 0
+
+              const modelUsageRecords: ModelUsageRecord[] = []
+              const userCandidates: HotspotCandidate[] = []
+              const toolsCandidates: HotspotCandidate[] = []
+
+              const makePreview = (text: string) => {
+                const trimmed = text.trim()
+                return trimmed.length > PREVIEW_MAX_LEN ? trimmed.slice(0, PREVIEW_MAX_LEN).trim() + "…" : trimmed
+              }
+              const makeFullText = (text: string) => {
+                return text.length > 5000 ? text.slice(0, 5000) + "\n\n… (truncated at 5000 chars)" : text
+              }
+
               // Total tokens of ALL conversation content (user + assistant +
               // tool output + tool call args + reasoning + file content)
               // processed BEFORE the first nonzero-input assistant. Subtracted
@@ -224,6 +260,7 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
               // the Tier 2 telemetry subtraction. A title-generator assistant
               // (tokens.input === 0) is skipped.
               let firstNonzeroAssistant: any = null
+              // sessionWasCompacted derived from resolveCompactionEvents after the loop
               let sessionWasCompacted = false
               // Per-message telemetry sum for reasoning tokens (provider-reported,
               // exact). Used to scale the REASONING category's char/4 entries.
@@ -243,7 +280,62 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
 
                 // Check for compaction part (signals a compaction summary message)
                 const hasCompaction = parts.some((p: any) => p.type === "compaction")
-                if (hasCompaction) sessionWasCompacted = true
+
+                // ── Model Usage Records Ledger (Genuine full ledger, all assistant messages) ──
+                if (info.role === "assistant") {
+                  const asstInfo = info as unknown as AssistantMessage
+                  const providerID = asstInfo.providerID
+                  const modelID = asstInfo.modelID
+                  if (providerID && modelID) {
+                    // Compute the reconstructed raw prompt size for this individual call.
+                    // This is provider-agnostic, restoring the cache counters subtracted by OpenCode.
+                    const currentRawPrompt = rawPromptTokens({
+                      input: asstInfo.tokens?.input ?? 0,
+                      cache: {
+                        read: asstInfo.tokens?.cache?.read ?? 0,
+                        write: asstInfo.tokens?.cache?.write ?? 0,
+                      },
+                    })
+
+                    // Skip degenerate zero-telemetry records entirely (e.g. aborted/interrupted/stub calls)
+                    // so they do not count toward message counts or overwrite valid raw prompt token statistics.
+                    const hasTelemetry = currentRawPrompt > 0 || (asstInfo.tokens?.output ?? 0) > 0 || (asstInfo.tokens?.reasoning ?? 0) > 0 || (asstInfo.cost ?? 0) > 0
+
+                    const partCounts: Record<string, number> = {}
+                    for (const p of parts) {
+                      const t = p.type || "unknown"
+                      partCounts[t] = (partCounts[t] || 0) + 1
+                    }
+                    const hasNonEmptyTextPart = parts.some((p: any) => p.type === "text" && typeof p.text === "string" && p.text.length > 0)
+                    const visibleOutputTokens = estimateVisibleOutputTokens(parts)
+
+                    log(
+                      `[ledger diagnostic] msgId: ${msgId} | providerID/modelID: ${providerID}/${modelID} | rawTokens: ${JSON.stringify(asstInfo.tokens ?? {})} | cost: ${asstInfo.cost ?? 0} | currentRawPrompt: ${currentRawPrompt} | hasTelemetry: ${hasTelemetry} | action: ${hasTelemetry ? "pushed" : "skipped"} | partsBreakdown: ${JSON.stringify(partCounts)} | hasNonEmptyTextPart: ${hasNonEmptyTextPart} | visibleOutputTokens: ${visibleOutputTokens}`
+                    )
+
+                    if (hasTelemetry) {
+                      modelUsageRecords.push({
+                        providerID,
+                        modelID,
+                        inputTokens: asstInfo.tokens?.input ?? 0,
+                        outputTokens: asstInfo.tokens?.output ?? 0,
+                        cacheRead: asstInfo.tokens?.cache?.read ?? 0,
+                        cacheWrite: asstInfo.tokens?.cache?.write ?? 0,
+                        cost: asstInfo.cost ?? 0,
+                        visibleOutputTokens: visibleOutputTokens,
+                        // We track the raw prompt size per call. When aggregated, we only keep the
+                        // chronologically last call's raw prompt size (not the sum of raw prompts across turns).
+                        // This avoids the double-counting trap where the same accumulated context gets counted on
+                        // every single turn, and reflects the true scale of the conversation's active state.
+                        // This mirrors the Tier-2 SYSTEM resolution's use of a single representative raw prompt.
+                        lastCallRawPromptTokens: currentRawPrompt,
+                        // Per-model peak context (input + cacheRead, matching sidebar convention).
+                        // Used for the ↑ display in the Models tab.
+                        peakInputTokens: (asstInfo.tokens?.input ?? 0) + (asstInfo.tokens?.cache?.read ?? 0),
+                      })
+                    }
+                  }
+                }
 
                 // ── User messages ───────────────────────────────────────────
                 if (info.role === "user") {
@@ -276,9 +368,17 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
 
                   userCounter++
                   log("analyze: COUNT user msg", msgId, "-", text.length, "chars ->", estimateTokens(text), "estimated tokens (User #" + userCounter + ")")
+                  const tokensCount = estimateTokens(text)
                   userEntries.push({
                     label: `User #${userCounter}`,
-                    tokens: estimateTokens(text),
+                    tokens: tokensCount,
+                  })
+                  userCandidates.push({
+                    category: "USER",
+                    label: `User #${userCounter}`,
+                    tokens: tokensCount,
+                    preview: makePreview(text),
+                    fullText: makeFullText(text),
                   })
                 }
 
@@ -310,28 +410,55 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                   const reasonTok = info?.tokens?.reasoning ?? 0
                   reasoningTelemetry += reasonTok
 
-                  const textParts = parts.filter((p: any) => p.type === "text")
-                  const text = textParts.map((p: any) => p.text ?? "").join("")
-                  if (text.trim().length > 0) {
+                  const visibleTokens = estimateVisibleOutputTokens(parts)
+                  if (visibleTokens > 0) {
                     assistantCounter++
-                    log("analyze: COUNT assistant msg", msgId, "-", text.length, "chars ->", estimateTokens(text), "(char/4 est.) tokens (Assistant #" + assistantCounter + ")")
+                    log("analyze: COUNT assistant msg", msgId, "-", visibleTokens, "visible tokens (Assistant #" + assistantCounter + ")")
                     assistantEntries.push({
                       label: `Assistant #${assistantCounter}`,
-                      tokens: estimateTokens(text),
+                      tokens: visibleTokens,
                     })
                   }
                 }
 
                 // ── Tool parts ──────────────────────────────────────────────
                 for (const part of parts) {
+                  const toolName = part.tool ?? "unknown"
                   if (part.type === "tool" && part.state?.status === "completed") {
                     const output = part.state?.output ?? ""
                     if (output.length > 0) {
-                      const toolName = part.tool ?? "unknown"
+                      const tokensCount = estimateTokens(output)
                       toolMap.set(
                         toolName,
-                        (toolMap.get(toolName) ?? 0) + estimateTokens(output),
+                        (toolMap.get(toolName) ?? 0) + tokensCount,
                       )
+                      let previewTitle: string | undefined = undefined
+                      const inputResult = summarizeToolInput(toolName, part.state?.input)
+                      if (inputResult !== null) {
+                        const pathLikeKeys = ["filePath", "path", "pattern"]
+                        if (pathLikeKeys.includes(inputResult.key) && (inputResult.value.includes("/") || inputResult.value.includes("\\"))) {
+                          previewTitle = shortenPath(inputResult.value, 2)
+                        } else {
+                          previewTitle = inputResult.value
+                        }
+                      } else {
+                        const rawTitle = part.state?.title
+                        if (rawTitle) {
+                          if (rawTitle.includes("/") || rawTitle.includes("\\")) {
+                            previewTitle = shortenPath(rawTitle, 2)
+                          } else {
+                            previewTitle = rawTitle
+                          }
+                        }
+                      }
+
+                      toolsCandidates.push({
+                        category: "TOOLS",
+                        label: `Tool: ${toolName}`,
+                        tokens: tokensCount,
+                        preview: pickPreview(output, previewTitle),
+                        fullText: makeFullText(output),
+                      })
                     }
                   }
                   // Also count tool call arguments (the JSON the model sends to invoke the tool)
@@ -340,11 +467,18 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                     if (callInput) {
                       const inputText = typeof callInput === "string" ? callInput : JSON.stringify(callInput)
                       if (inputText.length > 0) {
-                        const toolName = part.tool ?? "unknown"
+                        const tokensCount = estimateTokens(inputText)
                         toolMap.set(
                           toolName,
-                          (toolMap.get(toolName) ?? 0) + estimateTokens(inputText),
+                          (toolMap.get(toolName) ?? 0) + tokensCount,
                         )
+                        toolsCandidates.push({
+                          category: "TOOLS",
+                          label: `Tool Call: ${toolName}`,
+                          tokens: tokensCount,
+                          preview: makePreview(inputText),
+                          fullText: makeFullText(inputText),
+                        })
                       }
                     }
                   }
@@ -369,6 +503,20 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                 }
               }
 
+              // ── Resolve compaction events ─────────────────────────────────
+              // Pure function extracts compaction events from the raw message
+              // stream, resolving before/after tokens from adjacent assistant
+              // rawPromptTokens. Multi-consecutive-compaction limitation doc:
+              // if two compactions happen with no assistant between them, the
+              // second compaction's `before` reuses the first's prior assistant
+              // value (stale). This is rare and acceptable.
+              const { events: resolvedCompactionEvents, summary: resolvedCompactionSummary } = resolveCompactionEvents(messages)
+              if (resolvedCompactionEvents.length > 0) {
+                sessionWasCompacted = true
+                setCompactionSummary(resolvedCompactionSummary)
+                log("analyze: compaction summary:", JSON.stringify(resolvedCompactionSummary))
+              }
+
               // ── Build categories ──────────────────────────────────────────
               const cats: Category[] = []
 
@@ -386,7 +534,14 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
               let systemTokens: number = 0
               let systemSource: SystemSource | null = null
               const serverTotal = serverSnapshot?.t ?? null
-              const serverFrags: SystemFragment[] = serverSnapshot?.fragments ?? []
+              // Re-split from rawText with the current splitSystemFragments logic.
+              // This makes fragment display immune to stale server-cached fragments
+              // (the server plugin may not re-capture on every restart if the system prompt
+              // hasn't changed materially, leaving old pre-PR#39 fragments in system-tokens.json).
+              const rawSysText = serverSnapshot?.rawText
+              const serverFrags: SystemFragment[] = rawSysText
+               ? splitSystemFragments(rawSysText)
+               : (serverSnapshot?.fragments ?? [])
 
               if (baselineTokens !== null) {
                 // Tier 1 — V2 baseline DB.
@@ -518,6 +673,41 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                 .slice(0, 10)
               setTopContributors(top10)
 
+              // ── Aggregate and set model stats ──
+              const stats = aggregateModelStats(modelUsageRecords)
+              log("analyze: final aggregated model stats: " + JSON.stringify(stats.map(s => ({
+                "providerID/modelID": `${s.providerID}/${s.modelID}`,
+                msgCount: s.msgCount,
+                inputTokens: s.inputTokens,
+                outputTokens: s.outputTokens,
+                cacheRead: s.cacheRead,
+                cacheWrite: s.cacheWrite,
+                cost: s.cost,
+                visibleOutputTokens: s.visibleOutputTokens,
+                lastCallRawPromptTokens: s.lastCallRawPromptTokens
+              }))))
+              setModelStats(stats)
+
+              // ── Compute sequential model switches ──
+              setSwitchesCount(countModelSwitches(messages))
+
+              // ── Compute session cost ──
+              const totalCost = modelUsageRecords.reduce((acc, r) => acc + r.cost, 0)
+              setSessionCost(totalCost)
+
+              // ── Detect hotspots ──
+              // Scoped to USER and TOOLS categories only (not ASSISTANT, not SYSTEM, not REASONING - intentional per issue spec)
+              const candidates: Record<string, HotspotCandidate[]> = {
+                USER: userCandidates,
+                TOOLS: toolsCandidates,
+              }
+              const results = detectHotspots(candidates)
+              const formattedResults = results.map((res) => ({
+                ...res,
+                formattedRatio: res.ratio.toFixed(1),
+              }))
+              setHotspotResults(formattedResults)
+
               setLoading(false)
               // Check overflow after content renders.
               setTimeout(() => scroll.checkOverflow(), 50)
@@ -555,6 +745,37 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
 
           // ── Reactive dialog ──────────────────────────────────────────────
           api.ui.dialog.replace(() => {
+            const toggleExpand = (idx: number) => {
+              const list = tabs()
+              const currentTab = list[Math.min(activeTab(), list.length - 1)]
+              if (currentTab?.id !== "extra") return
+
+              if (idx >= hotspotResults().length) return
+
+              setExpandedHotspotIndex((prev) => (prev === idx ? null : idx))
+            }
+
+            const copyRawSystemText = async () => {
+              const list = tabs()
+              const currentTab = list[Math.min(activeTab(), list.length - 1)]
+              if (currentTab?.id !== "system" || !showRaw()) return
+
+              const text = rawSystemText()
+              if (!text) return
+
+              const success = await writeClipboard(text)
+              if (success) {
+                if (copiedTimeout) {
+                  clearTimeout(copiedTimeout)
+                }
+                setCopiedFlash(true)
+                copiedTimeout = setTimeout(() => {
+                  setCopiedFlash(false)
+                  copiedTimeout = null
+                }, 2000)
+              }
+            }
+
             onMount(() => {
               api.ui.dialog.setSize("large")
 
@@ -570,7 +791,13 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                   { key: "right", cmd: "analyze.tabRight", desc: "Next tab" },
                   { key: "l",     cmd: "analyze.tabRight", desc: "Next tab" },
                   { key: "v",     cmd: "analyze.toggleRaw", desc: "Raw prompt" },
+                  { key: "c",     cmd: "analyze.copyRaw",    desc: "Copy raw system prompt" },
                   { key: "r",    cmd: "analyze.reload",     desc: "Reload" },
+                  { key: "1",    cmd: "analyze.expand1",    desc: "Toggle expand large message 1" },
+                  { key: "2",    cmd: "analyze.expand2",    desc: "Toggle expand large message 2" },
+                  { key: "3",    cmd: "analyze.expand3",    desc: "Toggle expand large message 3" },
+                  { key: "4",    cmd: "analyze.expand4",    desc: "Toggle expand large message 4" },
+                  { key: "5",    cmd: "analyze.expand5",    desc: "Toggle expand large message 5" },
                 ],
                 commands: [
                   { name: "analyze.scrollUp",   title: "Scroll Up",   run: async () => { handleKey("up") } },
@@ -582,7 +809,13 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                     const idx = Math.min(activeTab(), list.length - 1)
                     if (list[idx]?.id === "system") setShowRaw((s) => !s)
                   } },
+                  { name: "analyze.copyRaw",    title: "Copy Raw Prompt", run: async () => { await copyRawSystemText() } },
                   { name: "analyze.reload",     title: "Reload",      run: async () => { reload() } },
+                  { name: "analyze.expand1",    title: "Toggle Expand Message 1", run: () => { toggleExpand(0) } },
+                  { name: "analyze.expand2",    title: "Toggle Expand Message 2", run: () => { toggleExpand(1) } },
+                  { name: "analyze.expand3",    title: "Toggle Expand Message 3", run: () => { toggleExpand(2) } },
+                  { name: "analyze.expand4",    title: "Toggle Expand Message 4", run: () => { toggleExpand(3) } },
+                  { name: "analyze.expand5",    title: "Toggle Expand Message 5", run: () => { toggleExpand(4) } },
                 ],
               })
 
@@ -605,6 +838,10 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
               if (pollInterval) {
                 clearInterval(pollInterval)
                 pollInterval = null
+              }
+              if (copiedTimeout) {
+                clearTimeout(copiedTimeout)
+                copiedTimeout = null
               }
             })
 
@@ -771,21 +1008,164 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                         )
                       }
 
-                      // ── Top Contributors tab ──────────────────────────
-                      if (tab.id === "top") {
-                        const top = topContributors()
-                        if (top.length === 0) return <text fg={muted}>No contributor data.</text>
+                      // ── Models tab ────────────────────────────────────
+                      //
+                      // Design note (self-verifiable row): ↑ = peakInputTokens,
+                      // ↓ = outputTokens, and ↑ + ↓ feeds directly into the %
+                      // formula. This mirrors the sidebar's peak-convention where
+                      // peakInputTokens = input + cacheRead (per-call max). Every
+                      // displayed number participates in the same computation.
+                      if (tab.id === "models") {
+                        const stats = modelStats()
+                        if (stats.length === 0) {
+                          return <text fg={muted}>No model usage data.</text>
+                        }
+
+                        const { sortedStats, totalModelTokens } = computeModelsTabLayout(stats)
+
                         return (
                           <box paddingBottom={1}>
-                            <text fg={fg}><b>Top Contributors</b></text>
+                            <text fg={fg}><b>Models in Session</b></text>
                             <text> </text>
-                            <box flexDirection="column" gap={0}>
-                              {top.map((entry, i) => (
-                                <text key={entry.label + i} fg={fg}>
-                                  {String(i + 1).padStart(2)}. {truncateLabel(entry.label)}{safeFmt(entry.tokens).padStart(10)} tokens
-                                </text>
-                              ))}
+                            <box flexDirection="column" gap={1}>
+                              {sortedStats.map((m, i) => {
+                                const modelTokens = m.peakInputTokens + m.outputTokens
+                                const pct = totalModelTokens > 0 ? (modelTokens / totalModelTokens) * 100 : 0
+                                const hitRate = calcCacheHitRate(m.cacheRead, m.inputTokens)
+
+                                const parts = [
+                                  `↑ ${fmt(m.peakInputTokens)}`,
+                                  `↓ ${fmt(m.outputTokens)}`
+                                ]
+                                if (hitRate !== null) {
+                                  parts.push(`cache ${hitRate}% (${fmt(m.cacheRead)} read, ${fmt(m.cacheWrite)} write)`)
+                                }
+                                parts.push(`${pct.toFixed(1)}% tokens`)
+                                if (m.cost > 0) {
+                                  parts.push(fmtCost(m.cost))
+                                }
+                                const infoLine = parts.join("  ")
+
+                                return (
+                                  <box key={m.providerID + "/" + m.modelID} flexDirection="column" gap={1}>
+                                    <text fg={fg}>{i + 1}. {m.providerID} / {m.modelID}  ·  {m.msgCount} msgs</text>
+                                    <text fg={muted}>{infoLine}</text>
+                                    <text fg={fg}>{buildBar(pct, 50)}</text>
+                                  </box>
+                                )
+                              })}
                             </box>
+                          </box>
+                        )
+                      }
+
+                      // ── Extra Info tab ─────────────────────────────────
+                      if (tab.id === "extra") {
+                        const top = topContributors()
+                        const cost = sessionCost()
+                        const comp = compactionSummary()
+                        const stats = modelStats()
+                        const hotspots = hotspotResults()
+
+                        return (
+                          <box paddingBottom={1} flexDirection="column" gap={1}>
+                            {/* a) Top Contributors */}
+                            <box flexDirection="column" gap={0}>
+                              <text fg={fg}><b>Top Contributors</b></text>
+                              <text> </text>
+                              {top.length === 0 ? (
+                                <text fg={muted}>No contributor data.</text>
+                              ) : (
+                                <box flexDirection="column" gap={0}>
+                                  {top.map((entry, i) => (
+                                    <text key={entry.label + i} fg={fg}>
+                                      {String(i + 1).padStart(2)}. {truncateLabel(entry.label)}{safeFmt(entry.tokens).padStart(10)} tokens
+                                    </text>
+                                  ))}
+                                </box>
+                              )}
+                            </box>
+
+                            {/* b) Session cost */}
+                            {cost > 0 && (
+                              <box flexDirection="column" gap={0}>
+                                <text> </text>
+                                <text fg={fg}><b>Session cost</b>: {fmtCost(cost)}</text>
+                              </box>
+                            )}
+
+                            {/* c) Compactions */}
+                            {(() => {
+                              if (!comp || comp.count === 0) return null
+                              const reductionText = comp.reductionTokens > 0 ? `, -${fmtCompact(comp.reductionTokens)} tokens` : ""
+                              const pendingCount = comp.count - comp.measured
+                              const pendingText = pendingCount > 0 && pendingCount < comp.count ? ` (${pendingCount} pending)` : ""
+                              return (
+                                <box flexDirection="column" gap={0}>
+                                  <text> </text>
+                                  <text fg={fg}>
+                                    <b>Compactions</b>: {comp.count}{reductionText}{pendingText}
+                                  </text>
+                                </box>
+                              )
+                            })()}
+
+                            {/* d) Model info */}
+                            {(() => {
+                              if (stats.length === 0) return null
+                              if (stats.length === 1) {
+                                return (
+                                  <box flexDirection="column" gap={0}>
+                                    <text> </text>
+                                    <text fg={fg}><b>Model</b>: {stats[0].modelID}</text>
+                                  </box>
+                                )
+                              }
+                              const sortedStats = [...stats].sort((a, b) => b.msgCount - a.msgCount)
+                              return (
+                                <box flexDirection="column" gap={0}>
+                                  <text> </text>
+                                  <text fg={fg}><b>Model switches: {switchesCount()}</b></text>
+                                  <text> </text>
+                                  {sortedStats.map((st) => (
+                                    <text key={st.providerID + "/" + st.modelID} fg={muted}>
+                                      {"  "}{st.providerID} / {st.modelID}        {st.msgCount} msgs
+                                    </text>
+                                  ))}
+                                </box>
+                              )
+                            })()}
+
+                            {/* e) Unusually large messages */}
+                            {hotspots.length > 0 && (
+                              <box flexDirection="column" gap={0}>
+                                <text> </text>
+                                <text fg={fg}><b>Unusually large messages: {hotspots.length}</b></text>
+                                <text> </text>
+                                {hotspots.map((res, idx) => {
+                                  const isExpanded = expandedHotspotIndex() === idx
+                                  return (
+                                    <box key={res.category + "/" + res.label + "/" + idx} flexDirection="column" gap={0} onMouseUp={() => toggleExpand(idx)}>
+                                      <text fg={fg}>
+                                        {"  "}{isExpanded ? "▾" : "▸"} {res.label}  {fmt(res.tokens)} tok  ({res.formattedRatio}x avg)
+                                      </text>
+                                      {!isExpanded && (
+                                        <text fg={muted}>
+                                          {"    "}{res.preview}
+                                        </text>
+                                      )}
+                                      {isExpanded && (
+                                        <box paddingLeft={4} paddingTop={1} paddingBottom={1} flexDirection="column">
+                                          <box borderStyle="round" borderColor={muted} padding={1}>
+                                            <text fg={fg}>{res.fullText}</text>
+                                          </box>
+                                        </box>
+                                      )}
+                                    </box>
+                                  )
+                                })}
+                              </box>
+                            )}
                           </box>
                         )
                       }
@@ -798,15 +1178,38 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                 {/* ── "more below" indicator ────────────────────────────── */}
                 <text fg={muted}>{scroll.hasOverflow() && !scroll.isAtBottom() ? "▼ more below" : " "}</text>
 
-                {/* ── Footer hints ──────────────────────────────────────── */}
+                 {/* ── Footer hints ──────────────────────────────────────── */}
                 {(() => {
                   const list = tabs()
                   const idx = Math.min(activeTab(), list.length - 1)
-                  const isSys = list[idx]?.id === "system"
+                  const currentTab = list[idx]
+                  const isSys = currentTab?.id === "system"
+                  const isExtra = currentTab?.id === "extra"
+                  const hasHotspots = hotspotResults().length > 0
+
                   return (
-                    <text fg={muted}>
-                      ← → tabs  ·  ↑↓ scroll{isSys ? "  ·  v raw" : ""}  ·  r reload
-                    </text>
+                    <box flexDirection="row" gap={1}>
+                      <text fg={muted}>← → tabs  ·  ↑↓ scroll</text>
+                      {isSys && (
+                        <>
+                          <text fg={muted}>·  v raw</text>
+                          {showRaw() && (
+                            <>
+                              <text fg={muted}>·</text>
+                              {copiedFlash() ? (
+                                <text fg={primary}>copied!</text>
+                              ) : (
+                                <text fg={muted}>c copy</text>
+                              )}
+                            </>
+                          )}
+                        </>
+                      )}
+                      {isExtra && hasHotspots && (
+                        <text fg={muted}>·  1-5 expand</text>
+                      )}
+                      <text fg={muted}>·  r reload</text>
+                    </box>
                   )
                 })()}
               </box>

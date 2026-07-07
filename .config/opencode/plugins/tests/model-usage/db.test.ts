@@ -3,10 +3,7 @@ import { Database } from "bun:sqlite"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { fetchRawRows, type RawUsageRow } from "./db"
-
-// ─── Temp DB helper ────────────────────────────────────────────────────────────
-// Matches the pattern from analyze.test.ts for hermetic temp DBs.
+import { fetchRawRows, type RawUsageRow } from "@model-usage/db"
 
 function setupDb(): { dbPath: string; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), "opencode-test-"))
@@ -32,11 +29,9 @@ function insertMessage(dbPath: string, timeCreated: number, data: Record<string,
   }
 }
 
-// ─── fetchRawRows ──────────────────────────────────────────────────────────────
-
 describe("fetchRawRows", () => {
   let setup: { dbPath: string; cleanup: () => void }
-  const REFERENCE = Date.UTC(2026, 6, 6, 12, 0, 0) // Jul 6 2026 12:00 UTC (Monday)
+  const REFERENCE = Date.UTC(2026, 6, 6, 12, 0, 0)
 
   beforeEach(() => {
     setup = setupDb()
@@ -71,7 +66,6 @@ describe("fetchRawRows", () => {
   })
 
   it("message outside range is excluded", () => {
-    // Insert message at REFERENCE but query range that doesn't include it
     insertMessage(setup.dbPath, REFERENCE, {
       role: "assistant",
       modelID: "gpt-4",
@@ -80,8 +74,7 @@ describe("fetchRawRows", () => {
       tokens: { input: 100, output: 50 },
     })
 
-    // Query for a different day entirely
-    const earlier = REFERENCE - 86_400_000 * 3 // 3 days before
+    const earlier = REFERENCE - 86_400_000 * 3
     const rows = fetchRawRows(setup.dbPath, earlier, earlier + 86_400_000)
     expect(rows).toHaveLength(0)
   })
@@ -100,11 +93,10 @@ describe("fetchRawRows", () => {
   })
 
   it("multiple messages return correct count and ASC order by time_created", () => {
-    const t1 = REFERENCE // Jul 6, 12:00
-    const t2 = REFERENCE + 3600_000 // Jul 6, 13:00
-    const t3 = REFERENCE + 7200_000 // Jul 6, 14:00
+    const t1 = REFERENCE
+    const t2 = REFERENCE + 3600_000
+    const t3 = REFERENCE + 7200_000
 
-    // Insert out of order
     insertMessage(setup.dbPath, t3, {
       role: "assistant", modelID: "gpt-4", providerID: "copilot",
       cost: 0.05, tokens: { input: 100, output: 50 },
@@ -121,7 +113,6 @@ describe("fetchRawRows", () => {
     const rows = fetchRawRows(setup.dbPath, REFERENCE - 1, REFERENCE + 86_400_000)
     expect(rows).toHaveLength(3)
 
-    // Verify ASC order by time_created
     for (let i = 1; i < rows.length; i++) {
       expect(rows[i].time_created).toBeGreaterThanOrEqual(rows[i - 1].time_created)
     }
@@ -140,7 +131,6 @@ describe("fetchRawRows", () => {
     const rows = fetchRawRows(setup.dbPath, REFERENCE - 1, REFERENCE + 86_400_000)
     expect(rows).toHaveLength(2)
 
-    // Flat rows ordered by time_created ASC — first copilot, then anthropic
     expect(rows[0].model_id).toBe("gpt-4")
     expect(rows[0].provider_id).toBe("copilot")
     expect(rows[0].input_tokens).toBe(5000)
@@ -162,9 +152,7 @@ describe("fetchRawRows", () => {
 
     const rows = fetchRawRows(setup.dbPath, REFERENCE - 1, REFERENCE + 86_400_000)
     expect(Array.isArray(rows)).toBe(true)
-    // null modelID/providerID rows should be filtered out or handled gracefully
     const nullRows = rows.filter((r: RawUsageRow) => r.model_id === null || r.provider_id === null)
-    // They may be included with null values depending on implementation
     expect(rows.length).toBeGreaterThanOrEqual(0)
   })
 
@@ -181,7 +169,6 @@ describe("fetchRawRows", () => {
       cost: 0.05, tokens: { input: 100, output: 50 },
     })
 
-    // startMs = REFERENCE exactly — message should be included
     const rows = fetchRawRows(setup.dbPath, REFERENCE, REFERENCE + 86_400_000)
     expect(rows).toHaveLength(1)
     expect(rows[0].input_tokens).toBe(100)
@@ -193,7 +180,6 @@ describe("fetchRawRows", () => {
       cost: 0.05, tokens: { input: 100, output: 50 },
     })
 
-    // endMs = REFERENCE + 86400000 — message at exactly endMs should be excluded
     const rows = fetchRawRows(setup.dbPath, REFERENCE, REFERENCE + 86_400_000)
     expect(rows).toHaveLength(0)
   })

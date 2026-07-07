@@ -12,7 +12,7 @@ import { makeScrollState } from "./shared/scroll"
 import { registerDialogKeyLayer } from "./shared/keys"
 
 const MS_PER_DAY = 86_400_000
-const CACHE_TTL_MS = 60_000  // 60 seconds — current period cache is stale after this
+const CACHE_TTL_MS = 60_000
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 type Granularity = "month" | "week" | "day"
@@ -38,7 +38,6 @@ interface UsageCache {
 // ─── Persistent multi-month cache ─────────────────────────────────────────
 const CACHE_DIR = `${homedir()}/.config/opencode/plugins/model-usage`
 const CACHE_FILE = `${CACHE_DIR}/.usage-cache.json`
-
 
 let usageCache: UsageCache = { version: 2, months: {} }
 
@@ -76,7 +75,6 @@ loadDiskCache()
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-/** Aggregate raw rows into UsageData (per-model breakdown). */
 function computeUsageDataFromRows(rows: RawUsageRow[]): UsageData {
   const modelMap = new Map<string, ModelUsage>()
 
@@ -85,7 +83,7 @@ function computeUsageDataFromRows(rows: RawUsageRow[]): UsageData {
     const key = `${row.provider_id}/${row.model_id}`
     let existing = modelMap.get(key)
     if (!existing) {
-      existing = { providerId: row.provider_id, modelId: row.model_id, totalCost: 0, totalInput: 0, totalOutput: 0 }
+      existing = { providerID: row.provider_id, modelID: row.model_id, totalCost: 0, totalInput: 0, totalOutput: 0 }
       modelMap.set(key, existing)
     }
     existing.totalCost += Math.max(0, row.cost ?? 0)
@@ -109,12 +107,10 @@ function computeUsageDataFromRows(rows: RawUsageRow[]): UsageData {
   return { models: sorted, totalInput, totalOutput, totalCost }
 }
 
-/** Build hierarchical cache tree from raw rows for a given month. */
 function buildHierarchy(rows: RawUsageRow[], monthStartMs: number, monthEndMs: number): CachePeriod {
-  // Bucket rows by day
   const dayMap = new Map<number, CachePeriod>()
-  const dayModels = new Map<number, Map<string, { providerId: string; modelId: string; totalCost: number; totalInput: number; totalOutput: number }>>()
-  const weekModels = new Map<number, Map<string, { providerId: string; modelId: string; totalCost: number; totalInput: number; totalOutput: number }>>()
+  const dayModels = new Map<number, Map<string, { providerID: string; modelID: string; totalCost: number; totalInput: number; totalOutput: number }>>()
+  const weekModels = new Map<number, Map<string, { providerID: string; modelID: string; totalCost: number; totalInput: number; totalOutput: number }>>()
   for (const row of rows) {
     const dayMs = Math.floor(row.time_created / MS_PER_DAY) * MS_PER_DAY
     let day = dayMap.get(dayMs)
@@ -137,7 +133,6 @@ function buildHierarchy(rows: RawUsageRow[], monthStartMs: number, monthEndMs: n
     day.outputTokens += row.output_tokens
     day.totalCost += row.cost
 
-    // Accumulate per-model breakdown during the initial pass
     if (row.provider_id && row.model_id) {
       let dm = dayModels.get(dayMs)
       if (!dm) {
@@ -147,7 +142,7 @@ function buildHierarchy(rows: RawUsageRow[], monthStartMs: number, monthEndMs: n
       const mk = `${row.provider_id}/${row.model_id}`
       let me = dm.get(mk)
       if (!me) {
-        me = { providerId: row.provider_id, modelId: row.model_id, totalCost: 0, totalInput: 0, totalOutput: 0 }
+        me = { providerID: row.provider_id, modelID: row.model_id, totalCost: 0, totalInput: 0, totalOutput: 0 }
         dm.set(mk, me)
       }
       me.totalCost += Math.max(0, row.cost ?? 0)
@@ -155,22 +150,19 @@ function buildHierarchy(rows: RawUsageRow[], monthStartMs: number, monthEndMs: n
       me.totalOutput += Math.max(0, row.output_tokens ?? 0)
     }
 
-    // Accumulate per-model breakdown for weeks during the initial pass
     if (row.provider_id && row.model_id) {
       const wm = getWeekMonday(new Date(row.time_created)).getTime()
       let wmap = weekModels.get(wm)
       if (!wmap) { wmap = new Map(); weekModels.set(wm, wmap) }
       const mk = `${row.provider_id}/${row.model_id}`
       let me = wmap.get(mk)
-      if (!me) { me = { providerId: row.provider_id, modelId: row.model_id, totalCost: 0, totalInput: 0, totalOutput: 0 }; wmap.set(mk, me) }
+      if (!me) { me = { providerID: row.provider_id, modelID: row.model_id, totalCost: 0, totalInput: 0, totalOutput: 0 }; wmap.set(mk, me) }
       me.totalCost += Math.max(0, row.cost ?? 0)
       me.totalInput += Math.max(0, row.input_tokens ?? 0)
       me.totalOutput += Math.max(0, row.output_tokens ?? 0)
     }
   }
 
-  // Fill in ALL days in the month range (including empty ones) so navigating
-  // to any day within a cached month is instant — no DB query for empty days.
   const allDays: CachePeriod[] = []
   for (let dayMs = monthStartMs; dayMs < monthEndMs; dayMs += MS_PER_DAY) {
     const existing = dayMap.get(dayMs)
@@ -193,7 +185,6 @@ function buildHierarchy(rows: RawUsageRow[], monthStartMs: number, monthEndMs: n
   }
   const sortedDays = allDays
 
-  // Compute per-model breakdown for each day from accumulated data
   for (const day of sortedDays) {
     const dm = dayModels.get(day.startMs)
     if (dm) {
@@ -205,7 +196,6 @@ function buildHierarchy(rows: RawUsageRow[], monthStartMs: number, monthEndMs: n
     }
   }
 
-  // Group days into ISO weeks
   const weekMap = new Map<number, { weekMonday: number; days: CachePeriod[] }>()
   for (const day of sortedDays) {
     const wm = getWeekMonday(new Date(day.startMs)).getTime()
@@ -224,7 +214,6 @@ function buildHierarchy(rows: RawUsageRow[], monthStartMs: number, monthEndMs: n
     const outputTokens = w.days.reduce((s, d) => s + d.outputTokens, 0)
     const totalCost = w.days.reduce((s, d) => s + d.totalCost, 0)
 
-    // Change vs previous week (within this month's weeks)
     let change: number | null = null
     if (i > 0) {
       const prev = weekMap.get(sortedWeekKeys[i - 1])!
@@ -235,7 +224,6 @@ function buildHierarchy(rows: RawUsageRow[], monthStartMs: number, monthEndMs: n
       }
     }
 
-    // Compute per-model breakdown for this week from accumulated data
     const wmap = weekModels.get(wk)
     const weekModelArr = wmap ? [...wmap.values()]
       .sort((a, b) => (b.totalInput + b.totalOutput) - (a.totalInput + a.totalOutput))
@@ -259,7 +247,6 @@ function buildHierarchy(rows: RawUsageRow[], monthStartMs: number, monthEndMs: n
   const totalOutput = weeks.reduce((s, w) => s + w.outputTokens, 0)
   const totalCostW = weeks.reduce((s, w) => s + w.totalCost, 0)
 
-  // Compute per-model breakdown for this month and store in cache
   const monthModels = computeUsageDataFromRows(rows).models
 
   return {
@@ -268,7 +255,7 @@ function buildHierarchy(rows: RawUsageRow[], monthStartMs: number, monthEndMs: n
     inputTokens: totalInput,
     outputTokens: totalOutput,
     totalCost: totalCostW,
-    change: null, // filled in by updateMonthCache
+    change: null,
     lastUpdated: Date.now(),
     weeks,
     days: sortedDays,
@@ -276,11 +263,9 @@ function buildHierarchy(rows: RawUsageRow[], monthStartMs: number, monthEndMs: n
   }
 }
 
-/** Store a month entry in the cache, computing change vs adjacent months. */
 function updateMonthCache(period: CachePeriod) {
   const key = String(period.startMs)
 
-  // Compute change vs previous month
   const prevDate = new Date(period.startMs)
   let prevMonth = prevDate.getUTCMonth() - 1
   let prevYear = prevDate.getUTCFullYear()
@@ -295,7 +280,6 @@ function updateMonthCache(period: CachePeriod) {
     }
   }
 
-  // Update first week's change vs last week of previous month
   if (period.weeks && period.weeks.length > 0) {
     const firstWeek = period.weeks[0]
     if (firstWeek.change === null && prevEntry?.weeks?.length) {
@@ -310,7 +294,6 @@ function updateMonthCache(period: CachePeriod) {
 
   usageCache.months[key] = period
 
-  // Also update next month's change if it exists
   let nextMonth = prevDate.getUTCMonth() + 1
   let nextYear = prevDate.getUTCFullYear()
   if (nextMonth > 11) { nextMonth = 0; nextYear++ }
@@ -327,7 +310,6 @@ function updateMonthCache(period: CachePeriod) {
   saveDiskCache()
 }
 
-/** Get the previous month's startMs given a month timestamp. */
 function getPrevMonthStartMs(ms: number): number {
   const d = new Date(ms)
   let m = d.getUTCMonth() - 1
@@ -335,23 +317,6 @@ function getPrevMonthStartMs(ms: number): number {
   if (m < 0) { m = 11; y-- }
   return Date.UTC(y, m, 1)
 }
-
-/** Get the month and year that contains a given timestamp. */
-function getMonthFromMs(ms: number): { year: number; month: number } {
-  const d = new Date(ms)
-  return { year: d.getUTCFullYear(), month: d.getUTCMonth() }
-}
-
-/** Get the first Monday that falls within a given month. */
-function getFirstMondayInMonth(year: number, month: number): number {
-  const monthStartMs = Date.UTC(year, month, 1)
-  const d = new Date(monthStartMs)
-  const day = d.getUTCDay() // 0=Sun, 1=Mon, ..., 6=Sat
-  const daysUntilMonday = (8 - day) % 7
-  return monthStartMs + daysUntilMonday * MS_PER_DAY
-}
-
-// ─── Command registration ──────────────────────────────────────────────────
 
 export function registerUsageCommand(api: TuiPluginApi) {
   api.keymap.registerLayer({
@@ -371,7 +336,6 @@ export function registerUsageCommand(api: TuiPluginApi) {
           const muted = theme?.muted ?? "#888888"
           const red = theme?.red ?? "#ef4444"
 
-          // ── DB not found ────────────────────────────────────────────────
           if (!existsSync(dbPath)) {
             api.ui.dialog.replace(() => {
               onMount(() => { api.ui.dialog.setSize("medium") })
@@ -386,7 +350,6 @@ export function registerUsageCommand(api: TuiPluginApi) {
             return
           }
 
-          // ── Determine earliest data bounds ──────────────────────────────
           let minMonthOffset = 0
           let minWeekOffset = 0
           let minDayOffset = 0
@@ -401,7 +364,6 @@ export function registerUsageCommand(api: TuiPluginApi) {
               const monthsBack = (currentYear * 12 + currentMonth) - (earliestYear * 12 + earliestMonth)
               minMonthOffset = -monthsBack
 
-              // Week offset
               const earliestWeekMonday = getWeekMonday(earliestDate).getTime()
               const currentWeekMonday = getWeekMonday(new Date()).getTime()
               if (earliestWeekMonday < currentWeekMonday) {
@@ -409,7 +371,6 @@ export function registerUsageCommand(api: TuiPluginApi) {
                 minWeekOffset = -diffWeeks
               }
 
-              // Day offset
               const earliestDayStart = Date.UTC(earliestDate.getUTCFullYear(), earliestDate.getUTCMonth(), earliestDate.getUTCDate())
               const currentDayStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
               if (earliestDayStart < currentDayStart) {
@@ -419,7 +380,6 @@ export function registerUsageCommand(api: TuiPluginApi) {
             }
           }
 
-          // ── State ────────────────────────────────────────────────────────
           const [granularity, setGranularity] = createSignal<Granularity>("month")
           const [monthOffset, setMonthOffset] = createSignal(0)
           const [weekOffset, setWeekOffset] = createSignal(0)
@@ -439,7 +399,6 @@ export function registerUsageCommand(api: TuiPluginApi) {
               const { startMs, endMs, label } = getWeekInfo(targetMonday)
               return { startMs, endMs, label }
             } else {
-              // day mode
               const currentDayStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
               const targetDayMs = currentDayStart + dayOffset() * MS_PER_DAY
               const startMs = targetDayMs
@@ -455,15 +414,11 @@ export function registerUsageCommand(api: TuiPluginApi) {
           const [hasLoadedOnce, setHasLoadedOnce] = createSignal(false)
           const [diffInfo, setDiffInfo] = createSignal<{ arrow: string; text: string }>({ arrow: "\u2014", text: "\u2014" })
 
-          // In-memory per-model cache for instant navigation
-          // Keyed by "{granularity}:{startMs}" — dies with the dialog
           const modelCache = new Map<string, UsageData>()
 
           function modelCacheKey(gran: Granularity, startMs: number): string {
             return `${gran}:${startMs}`
           }
-
-          // ── Data loading ────────────────────────────────────────────────
 
           function computeAndSetDiff(startMs: number, currentTotal: number) {
             const gran = granularity()
@@ -485,7 +440,6 @@ export function registerUsageCommand(api: TuiPluginApi) {
               const prevStartMs = startMs - periodMs
               const prevEndMs = startMs
 
-              // Check current month cache
               const currMonthStart = Date.UTC(new Date(startMs).getUTCFullYear(), new Date(startMs).getUTCMonth(), 1)
               const currCached = getMonthCache(currMonthStart)
               const periodField: "weeks" | "days" = gran === "week" ? "weeks" : "days"
@@ -521,7 +475,6 @@ export function registerUsageCommand(api: TuiPluginApi) {
             const gran = granularity()
             const cacheKey = modelCacheKey(gran, startMs)
 
-            // Check in-memory cache first
             if (!forceRefresh) {
               const cachedModelData = modelCache.get(cacheKey)
               if (cachedModelData) {
@@ -529,11 +482,10 @@ export function registerUsageCommand(api: TuiPluginApi) {
                 const currentTotal = cachedModelData.totalInput + cachedModelData.totalOutput
                 computeAndSetDiff(startMs, currentTotal)
                 if (!hasLoadedOnce()) setHasLoadedOnce(true)
-                return  // Instant — no DB query needed
+                return
               }
             }
 
-            // Check file cache for stored model breakdown (all granularities)
             if (gran === "month") {
               if (!forceRefresh) {
                 const fileCached = getMonthCache(startMs)
@@ -561,7 +513,6 @@ export function registerUsageCommand(api: TuiPluginApi) {
               }
             } else if (gran === "week" || gran === "day") {
               if (!forceRefresh) {
-                // For week/day: look up the parent month cache, then find the specific week/day
                 const monthStart = Date.UTC(new Date(startMs).getUTCFullYear(), new Date(startMs).getUTCMonth(), 1)
                 const monthCached = getMonthCache(monthStart)
                 const periodList = gran === "week" ? monthCached?.weeks : monthCached?.days
@@ -583,13 +534,11 @@ export function registerUsageCommand(api: TuiPluginApi) {
                     const currentTotal = period.inputTokens + period.outputTokens
                     computeAndSetDiff(startMs, currentTotal)
 
-                    // Background prefetch of adjacent periods from file cache
                     setTimeout(() => {
                       const periodMs = gran === "week" ? 7 * MS_PER_DAY : MS_PER_DAY
                       for (const adjStart of [startMs - periodMs, startMs + periodMs]) {
                         const adjKey = modelCacheKey(gran, adjStart)
                         if (modelCache.has(adjKey)) continue
-                        // Try current month's cache first, then adjacent month
                         let adjPeriod: CachePeriod | undefined
                         adjPeriod = periodList?.find(p => p.startMs === adjStart)
                         if (!adjPeriod) {
@@ -616,7 +565,6 @@ export function registerUsageCommand(api: TuiPluginApi) {
               }
             }
 
-            // Background fetch
             setTimeout(() => {
               const rowsResult = fetchRawRows(dbPath, startMs, endMs)
               if ("error" in rowsResult) {
@@ -628,12 +576,10 @@ export function registerUsageCommand(api: TuiPluginApi) {
 
               const rows = rowsResult
 
-              // Compute per-model breakdown for UI
               const usageData = computeUsageDataFromRows(rows)
               modelCache.set(modelCacheKey(granularity(), startMs), usageData)
               setViewState(usageData)
 
-              // For month mode: build hierarchical cache
               if (granularity() === "month") {
                 const monthStartMs = startMs
                 const monthEndMs = endMs
@@ -643,12 +589,9 @@ export function registerUsageCommand(api: TuiPluginApi) {
 
               computeAndSetDiff(startMs, usageData.totalInput + usageData.totalOutput)
 
-              // Background prefetch: cache adjacent periods for instant navigation
               setTimeout(() => {
                 if (gran === "month") {
-                  // Prefetch previous and next month
                   for (const adjStartMs of [getPrevMonthStartMs(startMs), startMs + 32 * MS_PER_DAY]) {
-                    // normalize next month start
                     const d = new Date(adjStartMs)
                     const adjNorm = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)
                     const adjKey = modelCacheKey("month", adjNorm)
@@ -659,7 +602,6 @@ export function registerUsageCommand(api: TuiPluginApi) {
                     modelCache.set(adjKey, computeUsageDataFromRows(adjRows))
                   }
                 } else {
-                  // Prefetch previous and next period (week or day)
                   const periodMs = gran === "week" ? 7 * MS_PER_DAY : MS_PER_DAY
                   for (const adjStart of [startMs - periodMs, startMs + periodMs]) {
                     const adjKey = modelCacheKey(gran, adjStart)
@@ -668,7 +610,6 @@ export function registerUsageCommand(api: TuiPluginApi) {
                     if ("error" in adjRows || adjRows.length === 0) continue
                     const adjData = computeUsageDataFromRows(adjRows)
                     modelCache.set(adjKey, adjData)
-                    // Also persist to file cache
                     const adjMonthStart = Date.UTC(new Date(adjStart).getUTCFullYear(), new Date(adjStart).getUTCMonth(), 1)
                     const adjMonth = getMonthCache(adjMonthStart)
                     if (adjMonth) {
@@ -688,7 +629,6 @@ export function registerUsageCommand(api: TuiPluginApi) {
             }, 0)
           }
 
-          // ── Handle key presses ──────────────────────────────────────────
           let cleanupKeyLayer: (() => void) | null = null
 
           function handleKey(key: string) {
@@ -753,45 +693,38 @@ export function registerUsageCommand(api: TuiPluginApi) {
             }
             if (key === "m") {
               if (granularity() === "month") {
-                // Month → Week
-                let newWeekOffset = 0
+                setGranularity("week")
                 if (monthOffset() !== 0) {
                   const m = now.getUTCMonth() + monthOffset()
                   const y = now.getUTCFullYear() + Math.floor(m / 12)
                   const month = ((m % 12) + 12) % 12
-                  const firstMondayMs = getFirstMondayInMonth(y, month)
-                  const currentWeekMonday = getWeekMonday(now).getTime()
-                  const diffWeeks = Math.round((currentWeekMonday - firstMondayMs) / (7 * MS_PER_DAY))
-                  newWeekOffset = -diffWeeks
+                  const monthStart = Date.UTC(y, month, 1)
+                  const targetMonday = getWeekMonday(new Date(monthStart + 7 * MS_PER_DAY)).getTime()
+                  const currentMonday = getWeekMonday(new Date()).getTime()
+                  const diffWeeks = Math.round((targetMonday - currentMonday) / (7 * MS_PER_DAY))
+                  setWeekOffset(diffWeeks > 0 ? Math.min(diffWeeks, 0) : Math.max(diffWeeks, minWeekOffset))
                 }
-                setGranularity("week")
-                setWeekOffset(newWeekOffset)
               } else if (granularity() === "week") {
-                // Week → Day
-                let newDayOffset = 0
+                setGranularity("day")
                 if (weekOffset() !== 0) {
-                  const currentMonday = getWeekMonday(now)
-                  const targetMonday = new Date(currentMonday.getTime() + weekOffset() * 7 * MS_PER_DAY)
+                  const currentMonday = getWeekMonday(new Date())
+                  const targetMonday = new Date(currentMonday.getTime() + weekOffset() * 7 * MS_PER_DAY + MS_PER_DAY)
                   const currentDayStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
                   const targetDayStart = Date.UTC(targetMonday.getUTCFullYear(), targetMonday.getUTCMonth(), targetMonday.getUTCDate())
                   const diffDays = Math.round((targetDayStart - currentDayStart) / MS_PER_DAY)
-                  newDayOffset = diffDays
+                  setDayOffset(diffDays > 0 ? Math.min(diffDays, 0) : Math.max(diffDays, minDayOffset))
                 }
-                setGranularity("day")
-                setDayOffset(newDayOffset)
               } else {
-                // Day → Month
-                let newMonthOffset = 0
+                setGranularity("month")
                 if (dayOffset() !== 0) {
                   const currentDayStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
                   const targetDayMs = currentDayStart + dayOffset() * MS_PER_DAY
                   const d = new Date(targetDayMs)
                   const currentYear = now.getUTCFullYear()
                   const currentMonth = now.getUTCMonth()
-                  newMonthOffset = (d.getUTCFullYear() * 12 + d.getUTCMonth()) - (currentYear * 12 + currentMonth)
+                  const newMonthOffset = (d.getUTCFullYear() * 12 + d.getUTCMonth()) - (currentYear * 12 + currentMonth)
+                  setMonthOffset(newMonthOffset > 0 ? Math.min(newMonthOffset, 0) : Math.max(newMonthOffset, minMonthOffset))
                 }
-                setGranularity("month")
-                setMonthOffset(newMonthOffset)
               }
               scroll.scrollToTop()
               setTimeout(loadData, 0)
@@ -806,7 +739,6 @@ export function registerUsageCommand(api: TuiPluginApi) {
             return false
           }
 
-          // ── Reactive dialog ─────────────────────────────────────────────
           api.ui.dialog.replace(() => {
             const { label } = computeWindow()
             const gran = granularity()
@@ -850,37 +782,7 @@ export function registerUsageCommand(api: TuiPluginApi) {
                   { name: "usage.scrollDown",  title: "Scroll Down",    run: async () => { handleKey("down") } },
                 ],
               })
-              // Initial load
               loadData()
-              // Background: prefetch past months so navigation is instant
-              setTimeout(() => {
-                const minMonthYear = now.getUTCFullYear() + Math.floor((now.getUTCMonth() + minMonthOffset) / 12)
-                const minMonthMonth = ((now.getUTCMonth() + minMonthOffset) % 12 + 12) % 12
-                const minPrefetchMs = Date.UTC(minMonthYear, minMonthMonth, 1)
-
-                let m = now.getUTCMonth() - 1
-                let y = now.getUTCFullYear()
-                while (true) {
-                  if (m < 0) { m = 11; y-- }
-                  const startMs = Date.UTC(y, m, 1)
-                  if (startMs < minPrefetchMs) break
-                  const endMs = Date.UTC(y, m + 1, 1)
-
-                  // Skip if already cached with complete data
-                  const existing = getMonthCache(startMs)
-                  if (existing && existing.lastUpdated >= endMs) { m--; continue }
-
-                  const rowsResult = fetchRawRows(dbPath, startMs, endMs)
-                  if ("error" in rowsResult) { m--; continue }
-
-                  const period = buildHierarchy(rowsResult, startMs, endMs)
-                  updateMonthCache(period)
-
-                  // Stop if no data this far back
-                  if (period.inputTokens === 0 && period.outputTokens === 0) break
-                  m--
-                }
-              }, 500)
             })
             onCleanup(() => {
               if (cleanupKeyLayer) {
@@ -937,10 +839,10 @@ export function registerUsageCommand(api: TuiPluginApi) {
                           {models.map((m, i) => {
                             const modelTokens = m.totalInput + m.totalOutput
                             const pct = totalTokens > 0 ? (modelTokens / totalTokens) * 100 : 0
-                            const displayName = `${m.providerId}/${m.modelId}`
+                            const displayName = `${m.providerID}/${m.modelID}`
                             const modelHasCost = m.totalCost > 0
                             return (
-                              <box key={m.providerId + "/" + m.modelId} flexDirection="column" gap={1}>
+                              <box key={m.providerID + "/" + m.modelID} flexDirection="column" gap={1}>
                                 <text fg={fg}>{i + 1}. {displayName}</text>
                                 <text fg={muted}>{fmt(modelTokens)} tokens ({pct.toFixed(1)}%){modelHasCost ? ` \u2014 ${fmtCost(m.totalCost)}` : ""}</text>
                                 <text fg={fg}>{buildBar(pct, 50)}</text>

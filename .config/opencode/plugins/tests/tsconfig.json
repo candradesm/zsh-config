@@ -1,0 +1,11 @@
+{
+  "compilerOptions": {
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "target": "esnext",
+    "paths": {
+      "@model-usage/*": ["../model-usage/*"],
+      "@jungle-mode/*": ["../jungle-mode/*"]
+    }
+  }
+}
