@@ -335,6 +335,7 @@ describe("Models Tab Token Share Regression Test", () => {
         cacheWrite: 0,
         cost: 0.005,
         visibleOutputTokens: estimateVisibleOutputTokens(parts),
+        peakInputTokens: 1000 + (5000 + i * 1000), // input + cacheRead
       })
     }
 
@@ -354,6 +355,7 @@ describe("Models Tab Token Share Regression Test", () => {
         cacheWrite: 0,
         cost: 0.15,
         visibleOutputTokens: estimateVisibleOutputTokens(parts),
+        peakInputTokens: 75000, // input + cacheRead
       })
     }
 
@@ -368,24 +370,24 @@ describe("Models Tab Token Share Regression Test", () => {
     // Use the production layout function to get sorted stats and total
     const { sortedStats, totalModelTokens } = computeModelsTabLayout(stats)
 
-    // Total model tokens (input+output across all models)
-    // modelA: inputTokens=10000, outputTokens=5000  → 15000
-    // modelB: inputTokens=150000, outputTokens=10000 → 160000
-    // total = 175000
-    expect(totalModelTokens).toBe(175000)
+    // Total model tokens (peakInput+output across all models)
+    // modelA: peakInputTokens=15000, outputTokens=5000  → 20000
+    // modelB: peakInputTokens=75000, outputTokens=10000 → 85000
+    // total = 105000
+    expect(totalModelTokens).toBe(105000)
 
     // Assert that modelB legitimately outranks modelA on % tokens
     // (cold-cache tax IS real billed usage — this is intentional)
-    const modelATokens = modelAStat.inputTokens + modelAStat.outputTokens // 15000
-    const modelBTokens = modelBStat.inputTokens + modelBStat.outputTokens // 160000
+    const modelATokens = modelAStat.peakInputTokens + modelAStat.outputTokens // 20000
+    const modelBTokens = modelBStat.peakInputTokens + modelBStat.outputTokens // 85000
     const modelAPct = (modelATokens / totalModelTokens) * 100
     const modelBPct = (modelBTokens / totalModelTokens) * 100
 
     expect(modelBPct).toBeGreaterThan(modelAPct)
-    expect(modelBPct).toBeCloseTo(91.4, 1)
-    expect(modelAPct).toBeCloseTo(8.6, 1)
+    expect(modelBPct).toBeCloseTo(80.95, 1)
+    expect(modelAPct).toBeCloseTo(19.05, 1)
 
-    // Sort order: modelB (160000 tokens) first, modelA (15000) second
+    // Sort order: modelB (85000 tokens) first, modelA (20000) second
     expect(sortedStats[0].modelID).toBe("gpt-4o")
     expect(sortedStats[1].modelID).toBe("claude-3-5-sonnet")
 
@@ -435,6 +437,7 @@ describe("Models Tab Input Tokens Last-Value-Wins Regression Test", () => {
         cost: 0.001,
         visibleOutputTokens: 150,
         lastCallRawPromptTokens: currentRawPrompt,
+        peakInputTokens: inputTokens + cacheRead,
       })
     }
 
@@ -454,7 +457,8 @@ describe("Models Tab Input Tokens Last-Value-Wins Regression Test", () => {
         lastCallRawPromptTokens: rawPromptTokens({
           input: 75000,
           cache: { read: 0, write: 0 }
-        })
+        }),
+        peakInputTokens: 75000,
       },
       {
         providerID: "openai",
@@ -468,7 +472,8 @@ describe("Models Tab Input Tokens Last-Value-Wins Regression Test", () => {
         lastCallRawPromptTokens: rawPromptTokens({
           input: 15000,
           cache: { read: 60000, write: 0 }
-        })
+        }),
+        peakInputTokens: 75000, // 15000 + 60000
       }
     ]
 
@@ -612,6 +617,7 @@ describe("Models Tab Degenerate Last Call Regression Test", () => {
               cost: asstInfo.cost ?? 0,
               visibleOutputTokens: estimateVisibleOutputTokens(parts),
               lastCallRawPromptTokens: currentRawPrompt,
+              peakInputTokens: (asstInfo.tokens?.input ?? 0) + (asstInfo.tokens?.cache?.read ?? 0),
             })
           }
         }
@@ -705,6 +711,7 @@ describe("Models Tab Degenerate Last Call Regression Test", () => {
               cost: asstInfo.cost ?? 0,
               visibleOutputTokens: estimateVisibleOutputTokens(parts),
               lastCallRawPromptTokens: currentRawPrompt,
+              peakInputTokens: (asstInfo.tokens?.input ?? 0) + (asstInfo.tokens?.cache?.read ?? 0),
             })
           }
         }
@@ -719,7 +726,7 @@ describe("Models Tab Degenerate Last Call Regression Test", () => {
     // Reasoning-only models (input=0, output=0, reasoning>0) show pct=0
     // mirroring /usage which also excludes reasoning from its SQL. Accepted edge case.
     const { totalModelTokens } = computeModelsTabLayout(stats)
-    expect(totalModelTokens).toBe(0) // input+output = 0 for reasoning-only
+    expect(totalModelTokens).toBe(0) // peakInput+output = 0 for reasoning-only
   })
 })
 
@@ -743,6 +750,7 @@ describe("0% Bug Regression — Tool-Only Model", () => {
         cacheWrite: 0,
         cost: 0.05,
         visibleOutputTokens: 0, // no text parts → 0 visible output tokens
+        peakInputTokens: 5000, // input + cacheRead
       },
       {
         providerID: "anthropic",
@@ -753,6 +761,7 @@ describe("0% Bug Regression — Tool-Only Model", () => {
         cacheWrite: 0,
         cost: 0.03,
         visibleOutputTokens: 0, // tool-call only, still no visible prose
+        peakInputTokens: 4000, // input + cacheRead
       },
     ]
 
@@ -760,13 +769,13 @@ describe("0% Bug Regression — Tool-Only Model", () => {
     expect(stats.length).toBe(1)
     expect(stats[0].visibleOutputTokens).toBe(0) // no visible prose
 
-    // Under the new scheme: pct is based on input+output
+    // Under the new scheme: pct is based on peakInput+output
     const { sortedStats, totalModelTokens } = computeModelsTabLayout(stats)
 
-    // totalModelTokens = (5000+3000) + (2000+1500) = 11500
-    expect(totalModelTokens).toBe(11500)
+    // totalModelTokens = 5000 (peakInput) + (2000+1500) = 8500
+    expect(totalModelTokens).toBe(8500)
 
-    const modelTokens = stats[0].inputTokens + stats[0].outputTokens
+    const modelTokens = stats[0].peakInputTokens + stats[0].outputTokens
     const pct = totalModelTokens > 0 ? (modelTokens / totalModelTokens) * 100 : 0
 
     // THE KEY ASSERTION: pct > 0, NOT 0!

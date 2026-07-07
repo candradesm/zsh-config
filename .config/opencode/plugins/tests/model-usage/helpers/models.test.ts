@@ -21,6 +21,7 @@ describe("aggregateModelStats", () => {
         cacheWrite: 10,
         cost: 0.0015,
         visibleOutputTokens: 150,
+        peakInputTokens: 150,
       },
     ]
 
@@ -36,6 +37,7 @@ describe("aggregateModelStats", () => {
         cacheWrite: 10,
         cost: 0.0015,
         visibleOutputTokens: 150,
+        peakInputTokens: 150,
       },
     ])
   })
@@ -51,6 +53,7 @@ describe("aggregateModelStats", () => {
         cacheWrite: 10,
         cost: 0.0015,
         visibleOutputTokens: 80,
+        peakInputTokens: 150,
       },
       {
         providerID: "anthropic",
@@ -61,6 +64,7 @@ describe("aggregateModelStats", () => {
         cacheWrite: 0,
         cost: 0.002,
         visibleOutputTokens: 120,
+        peakInputTokens: 220,
       },
       {
         providerID: "anthropic",
@@ -71,6 +75,7 @@ describe("aggregateModelStats", () => {
         cacheWrite: 0,
         cost: 0.0005,
         visibleOutputTokens: 30,
+        peakInputTokens: 50,
       },
     ]
 
@@ -86,6 +91,7 @@ describe("aggregateModelStats", () => {
         cacheWrite: 10,
         cost: 0.004,
         visibleOutputTokens: 230,
+        peakInputTokens: 220,
       },
     ])
   })
@@ -101,6 +107,7 @@ describe("aggregateModelStats", () => {
         cacheWrite: 10,
         cost: 0.0015,
         visibleOutputTokens: 150,
+        peakInputTokens: 150,
       },
       {
         providerID: "openai",
@@ -111,6 +118,7 @@ describe("aggregateModelStats", () => {
         cacheWrite: 0,
         cost: 0.005,
         visibleOutputTokens: 250,
+        peakInputTokens: 300,
       },
       {
         providerID: "openai",
@@ -121,6 +129,7 @@ describe("aggregateModelStats", () => {
         cacheWrite: 0,
         cost: 0.0001,
         visibleOutputTokens: 15,
+        peakInputTokens: 10,
       },
     ]
 
@@ -141,6 +150,7 @@ describe("aggregateModelStats", () => {
       cacheWrite: 10,
       cost: 0.0015,
       visibleOutputTokens: 150,
+      peakInputTokens: 150,
     })
 
     expect(openaiGpt4o).toEqual({
@@ -153,6 +163,7 @@ describe("aggregateModelStats", () => {
       cacheWrite: 0,
       cost: 0.005,
       visibleOutputTokens: 250,
+      peakInputTokens: 300,
     })
 
     expect(openaiGpt4oMini).toEqual({
@@ -165,6 +176,7 @@ describe("aggregateModelStats", () => {
       cacheWrite: 0,
       cost: 0.0001,
       visibleOutputTokens: 15,
+      peakInputTokens: 10,
     })
   })
 
@@ -179,6 +191,7 @@ describe("aggregateModelStats", () => {
         cacheWrite: 0,
         cost: 0,
         visibleOutputTokens: 0,
+        peakInputTokens: 0,
       },
     ]
 
@@ -194,6 +207,8 @@ describe("aggregateModelStats", () => {
         cacheWrite: 0,
         cost: 0,
         visibleOutputTokens: 0,
+        peakInputTokens: 0,
+        lastCallRawPromptTokens: undefined,
       },
     ])
   })
@@ -209,6 +224,7 @@ describe("aggregateModelStats", () => {
         cacheWrite: 10,
         cost: 0.0015,
         visibleOutputTokens: 120,
+        peakInputTokens: 150,
       },
       {
         providerID: "openrouter",
@@ -219,6 +235,7 @@ describe("aggregateModelStats", () => {
         cacheWrite: 20,
         cost: 0.003,
         visibleOutputTokens: 240,
+        peakInputTokens: 300,
       },
     ]
 
@@ -249,6 +266,7 @@ describe("aggregateModelStats", () => {
           cost: 0.0015,
           visibleOutputTokens: 150,
           lastCallRawPromptTokens: 25000,
+          peakInputTokens: 150,
         },
       ]
 
@@ -268,6 +286,7 @@ describe("aggregateModelStats", () => {
           cost: 0.0015,
           visibleOutputTokens: 150,
           lastCallRawPromptTokens: 15000, // first
+          peakInputTokens: 150,
         },
         {
           providerID: "anthropic",
@@ -279,6 +298,7 @@ describe("aggregateModelStats", () => {
           cost: 0.002,
           visibleOutputTokens: 160,
           lastCallRawPromptTokens: 45000, // max, but not last
+          peakInputTokens: 210,
         },
         {
           providerID: "anthropic",
@@ -290,6 +310,7 @@ describe("aggregateModelStats", () => {
           cost: 0.0025,
           visibleOutputTokens: 170,
           lastCallRawPromptTokens: 30000, // last (wins!)
+          peakInputTokens: 270,
         },
       ]
 
@@ -311,6 +332,7 @@ describe("aggregateModelStats", () => {
           cost: 0.0015,
           visibleOutputTokens: 150,
           lastCallRawPromptTokens: 22000,
+          peakInputTokens: 150,
         },
         {
           providerID: "anthropic",
@@ -322,6 +344,7 @@ describe("aggregateModelStats", () => {
           cost: 0.002,
           visibleOutputTokens: 160,
           lastCallRawPromptTokens: undefined, // should not overwrite 22000 per implementation
+          peakInputTokens: 210,
         },
       ]
 
@@ -341,6 +364,7 @@ describe("aggregateModelStats", () => {
           cost: 0.0015,
           visibleOutputTokens: 150,
           lastCallRawPromptTokens: undefined,
+          peakInputTokens: 150,
         },
         {
           providerID: "anthropic",
@@ -352,6 +376,7 @@ describe("aggregateModelStats", () => {
           cost: 0.002,
           visibleOutputTokens: 160,
           lastCallRawPromptTokens: 33000,
+          peakInputTokens: 210,
         },
       ]
 
@@ -370,6 +395,7 @@ describe("aggregateModelStats", () => {
           cacheWrite: 10,
           cost: 0.0015,
           visibleOutputTokens: 150,
+          peakInputTokens: 150,
         },
         {
           providerID: "anthropic",
@@ -380,6 +406,7 @@ describe("aggregateModelStats", () => {
           cacheWrite: 20,
           cost: 0.002,
           visibleOutputTokens: 160,
+          peakInputTokens: 210,
         },
       ]
 
@@ -399,6 +426,7 @@ describe("aggregateModelStats", () => {
           cost: 0.0015,
           visibleOutputTokens: 150,
           lastCallRawPromptTokens: 20000,
+          peakInputTokens: 150,
         },
         {
           providerID: "anthropic",
@@ -410,6 +438,7 @@ describe("aggregateModelStats", () => {
           cost: 0.002,
           visibleOutputTokens: 160,
           lastCallRawPromptTokens: 35000,
+          peakInputTokens: 210,
         },
       ]
 
@@ -425,6 +454,7 @@ describe("aggregateModelStats", () => {
         cost: 0.0035, // 0.0015 + 0.002
         visibleOutputTokens: 310, // 150 + 160
         lastCallRawPromptTokens: 35000, // last wins!
+        peakInputTokens: 210, // max of 150 and 210
       })
     })
 
@@ -440,6 +470,7 @@ describe("aggregateModelStats", () => {
           cost: 0.0015,
           visibleOutputTokens: 150,
           lastCallRawPromptTokens: 25000,
+          peakInputTokens: 150,
         },
         {
           providerID: "anthropic",
@@ -451,6 +482,7 @@ describe("aggregateModelStats", () => {
           cost: 0,
           visibleOutputTokens: 0,
           lastCallRawPromptTokens: 0, // degenerate last call
+          peakInputTokens: 0,
         },
       ]
 
@@ -469,6 +501,7 @@ describe("aggregateModelStats", () => {
           cost: 0.0015,
           visibleOutputTokens: 150,
           lastCallRawPromptTokens: 25000,
+          peakInputTokens: 150,
         },
         {
           providerID: "anthropic",
@@ -480,6 +513,7 @@ describe("aggregateModelStats", () => {
           cost: 0,
           visibleOutputTokens: 0,
           lastCallRawPromptTokens: undefined, // degenerate last call
+          peakInputTokens: 0,
         },
       ]
 
@@ -499,6 +533,7 @@ describe("aggregateModelStats", () => {
           cost: 0.0015,
           visibleOutputTokens: 150,
           lastCallRawPromptTokens: 15000, // first real
+          peakInputTokens: 150,
         },
         {
           providerID: "anthropic",
@@ -510,6 +545,7 @@ describe("aggregateModelStats", () => {
           cost: 0,
           visibleOutputTokens: 0,
           lastCallRawPromptTokens: 0, // middle 0
+          peakInputTokens: 0,
         },
         {
           providerID: "anthropic",
@@ -521,6 +557,7 @@ describe("aggregateModelStats", () => {
           cost: 0.002,
           visibleOutputTokens: 160,
           lastCallRawPromptTokens: 30000, // last real (wins)
+          peakInputTokens: 210,
         },
       ]
 
@@ -540,6 +577,7 @@ describe("aggregateModelStats", () => {
           cost: 0,
           visibleOutputTokens: 0,
           lastCallRawPromptTokens: 0,
+          peakInputTokens: 0,
         },
       ]
 
@@ -559,6 +597,7 @@ describe("aggregateModelStats", () => {
           cost: 0.0015,
           visibleOutputTokens: 150,
           lastCallRawPromptTokens: 25000,
+          peakInputTokens: 150,
         },
         {
           providerID: "anthropic",
@@ -570,6 +609,7 @@ describe("aggregateModelStats", () => {
           cost: 0.0005,
           visibleOutputTokens: 80,
           lastCallRawPromptTokens: 0, // should be ignored for raw prompt but others should sum
+          peakInputTokens: 70,
         },
       ]
 
@@ -585,6 +625,7 @@ describe("aggregateModelStats", () => {
         cost: 0.0020,
         visibleOutputTokens: 230,
         lastCallRawPromptTokens: 25000, // retains prior value
+        peakInputTokens: 150, // max of 150 and 70
       })
     })
   })
@@ -658,10 +699,10 @@ describe("countModelSwitches", () => {
 // ─── computeModelsTabLayout ─────────────────────────────────────────────────
 
 describe("computeModelsTabLayout", () => {
-  it("sorts by modelTokens (input+output) descending", () => {
+  it("sorts by modelTokens (peakInput+output) descending", () => {
     const stats: ModelStat[] = [
-      { providerID: "p", modelID: "A", msgCount: 1, inputTokens: 1000, outputTokens: 500, cacheRead: 0, cacheWrite: 0, cost: 0.01, visibleOutputTokens: 400 },
-      { providerID: "p", modelID: "B", msgCount: 1, inputTokens: 500, outputTokens: 200, cacheRead: 0, cacheWrite: 0, cost: 0.005, visibleOutputTokens: 150 },
+      { providerID: "p", modelID: "A", msgCount: 1, inputTokens: 1000, outputTokens: 500, cacheRead: 0, cacheWrite: 0, cost: 0.01, visibleOutputTokens: 400, peakInputTokens: 1000 },
+      { providerID: "p", modelID: "B", msgCount: 1, inputTokens: 500, outputTokens: 200, cacheRead: 0, cacheWrite: 0, cost: 0.005, visibleOutputTokens: 150, peakInputTokens: 500 },
     ]
     const { sortedStats } = computeModelsTabLayout(stats)
     expect(sortedStats[0].modelID).toBe("A")
@@ -670,8 +711,8 @@ describe("computeModelsTabLayout", () => {
 
   it("falls back to msgCount desc when modelTokens are equal", () => {
     const stats: ModelStat[] = [
-      { providerID: "p", modelID: "A", msgCount: 3, inputTokens: 500, outputTokens: 500, cacheRead: 0, cacheWrite: 0, cost: 0.01, visibleOutputTokens: 400 },
-      { providerID: "p", modelID: "B", msgCount: 5, inputTokens: 500, outputTokens: 500, cacheRead: 0, cacheWrite: 0, cost: 0.01, visibleOutputTokens: 400 },
+      { providerID: "p", modelID: "A", msgCount: 3, inputTokens: 500, outputTokens: 500, cacheRead: 0, cacheWrite: 0, cost: 0.01, visibleOutputTokens: 400, peakInputTokens: 500 },
+      { providerID: "p", modelID: "B", msgCount: 5, inputTokens: 500, outputTokens: 500, cacheRead: 0, cacheWrite: 0, cost: 0.01, visibleOutputTokens: 400, peakInputTokens: 500 },
     ]
     const { sortedStats } = computeModelsTabLayout(stats)
     // B has higher msgCount, so B should come first
@@ -681,8 +722,8 @@ describe("computeModelsTabLayout", () => {
 
   it("falls back to modelID asc when modelTokens and msgCount are equal", () => {
     const stats: ModelStat[] = [
-      { providerID: "p", modelID: "bbb", msgCount: 1, inputTokens: 500, outputTokens: 500, cacheRead: 0, cacheWrite: 0, cost: 0.01, visibleOutputTokens: 400 },
-      { providerID: "p", modelID: "aaa", msgCount: 1, inputTokens: 500, outputTokens: 500, cacheRead: 0, cacheWrite: 0, cost: 0.01, visibleOutputTokens: 400 },
+      { providerID: "p", modelID: "bbb", msgCount: 1, inputTokens: 500, outputTokens: 500, cacheRead: 0, cacheWrite: 0, cost: 0.01, visibleOutputTokens: 400, peakInputTokens: 500 },
+      { providerID: "p", modelID: "aaa", msgCount: 1, inputTokens: 500, outputTokens: 500, cacheRead: 0, cacheWrite: 0, cost: 0.01, visibleOutputTokens: 400, peakInputTokens: 500 },
     ]
     const { sortedStats } = computeModelsTabLayout(stats)
     // "p/aaa" < "p/bbb", so aaa comes first
@@ -692,8 +733,8 @@ describe("computeModelsTabLayout", () => {
 
   it("computes totalModelTokens correctly", () => {
     const stats: ModelStat[] = [
-      { providerID: "p", modelID: "A", msgCount: 1, inputTokens: 1000, outputTokens: 500, cacheRead: 0, cacheWrite: 0, cost: 0.01, visibleOutputTokens: 400 },
-      { providerID: "p", modelID: "B", msgCount: 1, inputTokens: 500, outputTokens: 200, cacheRead: 0, cacheWrite: 0, cost: 0.005, visibleOutputTokens: 150 },
+      { providerID: "p", modelID: "A", msgCount: 1, inputTokens: 1000, outputTokens: 500, cacheRead: 0, cacheWrite: 0, cost: 0.01, visibleOutputTokens: 400, peakInputTokens: 1000 },
+      { providerID: "p", modelID: "B", msgCount: 1, inputTokens: 500, outputTokens: 200, cacheRead: 0, cacheWrite: 0, cost: 0.005, visibleOutputTokens: 150, peakInputTokens: 500 },
     ]
     const { totalModelTokens } = computeModelsTabLayout(stats)
     expect(totalModelTokens).toBe(2200) // (1000+500) + (500+200)
@@ -701,24 +742,24 @@ describe("computeModelsTabLayout", () => {
 
   it("computes correct percentage per model", () => {
     const stats: ModelStat[] = [
-      { providerID: "p", modelID: "A", msgCount: 1, inputTokens: 1000, outputTokens: 500, cacheRead: 0, cacheWrite: 0, cost: 0.01, visibleOutputTokens: 400 },
-      { providerID: "p", modelID: "B", msgCount: 1, inputTokens: 500, outputTokens: 200, cacheRead: 0, cacheWrite: 0, cost: 0.005, visibleOutputTokens: 150 },
+      { providerID: "p", modelID: "A", msgCount: 1, inputTokens: 1000, outputTokens: 500, cacheRead: 0, cacheWrite: 0, cost: 0.01, visibleOutputTokens: 400, peakInputTokens: 1000 },
+      { providerID: "p", modelID: "B", msgCount: 1, inputTokens: 500, outputTokens: 200, cacheRead: 0, cacheWrite: 0, cost: 0.005, visibleOutputTokens: 150, peakInputTokens: 500 },
     ]
     const { sortedStats, totalModelTokens } = computeModelsTabLayout(stats)
-    const pctA = ((sortedStats[0].inputTokens + sortedStats[0].outputTokens) / totalModelTokens) * 100
-    const pctB = ((sortedStats[1].inputTokens + sortedStats[1].outputTokens) / totalModelTokens) * 100
+    const pctA = ((sortedStats[0].peakInputTokens + sortedStats[0].outputTokens) / totalModelTokens) * 100
+    const pctB = ((sortedStats[1].peakInputTokens + sortedStats[1].outputTokens) / totalModelTokens) * 100
     expect(pctA).toBeCloseTo(68.18, 1)
     expect(pctB).toBeCloseTo(31.82, 1)
   })
 
   it("single model returns pct=100", () => {
     const stats: ModelStat[] = [
-      { providerID: "p", modelID: "A", msgCount: 1, inputTokens: 300, outputTokens: 200, cacheRead: 0, cacheWrite: 0, cost: 0.01, visibleOutputTokens: 400 },
+      { providerID: "p", modelID: "A", msgCount: 1, inputTokens: 300, outputTokens: 200, cacheRead: 0, cacheWrite: 0, cost: 0.01, visibleOutputTokens: 400, peakInputTokens: 300 },
     ]
     const { sortedStats, totalModelTokens } = computeModelsTabLayout(stats)
     expect(sortedStats.length).toBe(1)
     expect(totalModelTokens).toBe(500)
-    const pct = ((sortedStats[0].inputTokens + sortedStats[0].outputTokens) / totalModelTokens) * 100
+    const pct = ((sortedStats[0].peakInputTokens + sortedStats[0].outputTokens) / totalModelTokens) * 100
     expect(pct).toBe(100)
   })
 })

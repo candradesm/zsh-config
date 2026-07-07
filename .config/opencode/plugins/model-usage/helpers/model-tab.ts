@@ -10,19 +10,21 @@ import type { ModelStat } from "./models"
 /**
  * Computes the sorted stats and total token count for the Models tab.
  *
- * Design note (deliberate trade-off): using input+output for % means a
+ * Design note (deliberate trade-off): using peakInput+output for % means a
  * cold-cache-switch model can legitimately outrank a workhorse model on
- * token usage (those tokens WERE billed). The `msgCount` counterbalances
- * this. Reasoning-only models (o1-style, input=0, output=0, reasoning>0)
- * will show 0% — mirroring /usage which also excludes reasoning from its
- * SQL. Accepted edge case.
+ * token usage (those tokens WERE billed). This mirrors the sidebar's
+ * peak-context convention: ↑ = peakInputTokens, ↓ = outputTokens, and
+ * every displayed number feeds the same formula. The `msgCount`
+ * counterbalances this. Reasoning-only models (o1-style, input=0, output=0,
+ * reasoning>0) will show 0% — mirroring /usage which also excludes
+ * reasoning from its SQL. Accepted edge case.
  */
 export function computeModelsTabLayout(stats: ModelStat[]): { sortedStats: ModelStat[]; totalModelTokens: number } {
-  const totalModelTokens = stats.reduce((acc, st) => acc + st.inputTokens + st.outputTokens, 0)
+  const totalModelTokens = stats.reduce((acc, st) => acc + st.peakInputTokens + st.outputTokens, 0)
 
   const sortedStats = [...stats].sort((a, b) => {
-    const totalA = a.inputTokens + a.outputTokens
-    const totalB = b.inputTokens + b.outputTokens
+    const totalA = a.peakInputTokens + a.outputTokens
+    const totalB = b.peakInputTokens + b.outputTokens
     if (totalB !== totalA) return totalB - totalA
     if (b.msgCount !== a.msgCount) return b.msgCount - a.msgCount
     return `${a.providerID}/${a.modelID}`.localeCompare(`${b.providerID}/${b.modelID}`)

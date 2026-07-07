@@ -17,6 +17,7 @@ export interface ModelUsageRecord {
   cost: number
   visibleOutputTokens: number
   lastCallRawPromptTokens?: number
+  peakInputTokens: number
 }
 
 export interface ModelStat {
@@ -30,6 +31,7 @@ export interface ModelStat {
   cost: number
   visibleOutputTokens: number
   lastCallRawPromptTokens?: number
+  peakInputTokens: number
 }
 
 // ─── Aggregation ─────────────────────────────────────────────────────────────
@@ -56,6 +58,7 @@ export function aggregateModelStats(records: readonly ModelUsageRecord[]): Model
       existing.cacheWrite += r.cacheWrite
       existing.cost += r.cost
       existing.visibleOutputTokens += r.visibleOutputTokens
+      existing.peakInputTokens = Math.max(existing.peakInputTokens, r.peakInputTokens)
       // Defense-in-depth: A degenerate/aborted trailing call (with zero real telemetry) must not erase
       // a real prior "last known good" prompt token value for this model. We only overwrite
       // with a newer value if that value is legitimately greater than 0.
@@ -77,6 +80,7 @@ export function aggregateModelStats(records: readonly ModelUsageRecord[]): Model
         cost: r.cost,
         visibleOutputTokens: r.visibleOutputTokens,
         lastCallRawPromptTokens: r.lastCallRawPromptTokens,
+        peakInputTokens: r.peakInputTokens,
       })
       log(`aggregateModelStats: created new group ${key} - input: ${r.inputTokens}, output: ${r.outputTokens}, cacheRead: ${r.cacheRead}, cacheWrite: ${r.cacheWrite}, visibleOutput: ${r.visibleOutputTokens}, cost: ${r.cost}, lastCallRawPrompt: ${r.lastCallRawPromptTokens}`)
     }

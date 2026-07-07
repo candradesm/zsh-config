@@ -329,6 +329,9 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                         // every single turn, and reflects the true scale of the conversation's active state.
                         // This mirrors the Tier-2 SYSTEM resolution's use of a single representative raw prompt.
                         lastCallRawPromptTokens: currentRawPrompt,
+                        // Per-model peak context (input + cacheRead, matching sidebar convention).
+                        // Used for the ↑ display in the Models tab.
+                        peakInputTokens: (asstInfo.tokens?.input ?? 0) + (asstInfo.tokens?.cache?.read ?? 0),
                       })
                     }
                   }
@@ -1007,13 +1010,11 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
 
                       // ── Models tab ────────────────────────────────────
                       //
-                      // Design note (deliberate trade-off): using input+output for
-                      // % means a cold-cache-switch model can legitimately outrank
-                      // a workhorse model on token usage (those tokens WERE billed).
-                      // The `msgCount` counterbalances this. Reasoning-only models
-                      // (o1-style, input=0, output=0, reasoning>0) will show 0% —
-                      // mirroring /usage which also excludes reasoning from its SQL.
-                      // Accepted edge case.
+                      // Design note (self-verifiable row): ↑ = peakInputTokens,
+                      // ↓ = outputTokens, and ↑ + ↓ feeds directly into the %
+                      // formula. This mirrors the sidebar's peak-convention where
+                      // peakInputTokens = input + cacheRead (per-call max). Every
+                      // displayed number participates in the same computation.
                       if (tab.id === "models") {
                         const stats = modelStats()
                         if (stats.length === 0) {
@@ -1028,16 +1029,16 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                             <text> </text>
                             <box flexDirection="column" gap={1}>
                               {sortedStats.map((m, i) => {
-                                const modelTokens = m.inputTokens + m.outputTokens
+                                const modelTokens = m.peakInputTokens + m.outputTokens
                                 const pct = totalModelTokens > 0 ? (modelTokens / totalModelTokens) * 100 : 0
                                 const hitRate = calcCacheHitRate(m.cacheRead, m.inputTokens)
 
                                 const parts = [
-                                  `↑ ${fmt(m.inputTokens)}`,
+                                  `↑ ${fmt(m.peakInputTokens)}`,
                                   `↓ ${fmt(m.outputTokens)}`
                                 ]
                                 if (hitRate !== null) {
-                                  parts.push(`cache ${hitRate}%`)
+                                  parts.push(`cache ${hitRate}% (${fmt(m.cacheRead)} read, ${fmt(m.cacheWrite)} write)`)
                                 }
                                 parts.push(`${pct.toFixed(1)}% tokens`)
                                 if (m.cost > 0) {
