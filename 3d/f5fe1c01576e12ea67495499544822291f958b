@@ -1,0 +1,21 @@
+.config/opencode/plugins/model-usage/helpers/models.test.ts
+  s_7a2f8044cf199e::t_392aa0ef89c7ba 22,37,52,62,72,87,102,112,122,142,154,166,180,195,210,220,232,235
+.config/opencode/plugins/model-usage/helpers/tokens.test.ts
+  s_7a2f8044cf199e::t_2a15f17ce42a82 1-51
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.4",
+  "base_commit_sha": "3df5fe1c01576e12ea67495499544822291f958b",
+  "prompts": {},
+  "sessions": {
+    "s_7a2f8044cf199e": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_0c9457d89ffep0AIDZFkZvBV0E",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "cristianandrades <cristianam@ext.inditex.com>"
+    }
+  }
+}
