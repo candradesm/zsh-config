@@ -98,15 +98,6 @@ function tryCommand(cmd: string, args: string[], text: string): Promise<boolean>
 }
 
 /**
- * Pure: returns whether the current process output is a TTY, which determines
- * whether writing an OSC 52 escape sequence is appropriate (non-TTY streams
- * would emit garbage). Extracted for testability.
- */
-export function shouldTryOsc52(isTTY: boolean): boolean {
-  return isTTY
-}
-
-/**
  * Impure orchestrator: tries each resolveClipboardCandidates(process.platform) command in order
  * (spawn, write `text` to stdin, wait for exit code 0 = success); on ALL failures, falls back to
  * writing buildOsc52Sequence(text) to process.stdout when isTTY (returns true, best-effort, can't
@@ -123,7 +114,7 @@ export async function writeClipboard(text: string): Promise<boolean> {
       }
     }
     // Fallback to OSC 52
-    if (shouldTryOsc52(process.stdout.isTTY)) {
+    if (process.stdout.isTTY) {
       const oscSequence = buildOsc52Sequence(text)
       process.stdout.write(oscSequence)
       return true

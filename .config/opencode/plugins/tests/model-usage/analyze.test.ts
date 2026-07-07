@@ -5,6 +5,7 @@ import type { ModelUsageRecord } from "@model-usage/helpers/models"
 import { splitSystemFragments } from "@model-usage/helpers/fragments"
 import { loadBaseline } from "@model-usage/db"
 import { truncateLabel } from "@model-usage/helpers/format"
+import { computeModelsTabLayout } from "@model-usage/helpers/model-tab"
 
 // ─── estimateTokens ───────────────────────────────────────────────────────────
 
@@ -311,15 +312,20 @@ describe("truncateLabel", () => {
 // ─── Models Tab Token Share Regression Test ───────────────────────────────────
 
 describe("Models Tab Token Share Regression Test", () => {
-  it("verifies that modelB (minority switched model) does not skew share or output tokens over modelA (workhorse)", () => {
+  it("verifies that modelB (cold-cache spike) legitimately outranks modelA (workhorse) on % tokens under the new input+output (/usage-mirror) scheme", () => {
+    // DESIGN NOTE (deliberate trade-off): using input+output for % means a
+    // cold-cache-switch model can legitimately outrank a workhorse model on
+    // token usage (those tokens WERE billed). The `msgCount` counterbalances
+    // this. Under the old (visibleOutput) scheme, modelA outranked modelB on
+    // share because visibleOutput favored modelA's long prose. The new scheme
+    // correctly reflects that modelB's cold-cache spike cost real money.
+
     // 1. Simulate modelA (workhorse): 10 turns, small input deltas, growing cache, large visible text, moderate output payload.
-    const modelARecords: any[] = []
+    const modelARecords: ModelUsageRecord[] = []
     for (let i = 0; i < 10; i++) {
       const parts = [
         { type: "text", text: "This is substantial visible assistant prose written by modelA to prove it carried the session. ".repeat(10) }
       ]
-      // 94 chars * 10 repeats = 940 chars per turn.
-      // 940 / 4 = 235 visible output tokens.
       modelARecords.push({
         providerID: "anthropic",
         modelID: "claude-3-5-sonnet",
@@ -332,12 +338,12 @@ describe("Models Tab Token Share Regression Test", () => {
       })
     }
 
-    // 2. Simulate modelB (minority): 2 turns, massive input spike (cache invalidation), short visible text, huge output (tool JSON).
-    const modelBRecords: any[] = []
+    // 2. Simulate modelB (cold-cache switch): 2 turns, massive input spike (cache invalidation), short visible text, huge output (tool JSON).
+    const modelBRecords: ModelUsageRecord[] = []
     for (let i = 0; i < 2; i++) {
       const parts = [
-        { type: "text", text: "Sure, let's proceed." }, // 20 chars -> 5 visible output tokens
-        { type: "tool-call", text: '{"some_massive_json_payload": "..."}' }, // should be ignored by visible tokens
+        { type: "text", text: "Sure, let's proceed." },
+        { type: "tool-call", text: '{"some_massive_json_payload": "..."}' },
       ]
       modelBRecords.push({
         providerID: "openai",
@@ -351,10 +357,7 @@ describe("Models Tab Token Share Regression Test", () => {
       })
     }
 
-    // Combine all simulated records
     const allRecords = [...modelARecords, ...modelBRecords]
-
-    // Aggregate stats per model group (just like analyze.tsx does)
     const stats = aggregateModelStats(allRecords)
     const modelAStat = stats.find(s => s.modelID === "claude-3-5-sonnet")!
     const modelBStat = stats.find(s => s.modelID === "gpt-4o")!
@@ -362,34 +365,35 @@ describe("Models Tab Token Share Regression Test", () => {
     expect(modelAStat).toBeDefined()
     expect(modelBStat).toBeDefined()
 
-    // Old Buggy Logic Assessment:
-    // Old logic: computed share based on raw (inputTokens + outputTokens)
-    const oldTotalA = modelAStat.inputTokens + modelAStat.outputTokens // 10 * (1000 + 500) = 15000
-    const oldTotalB = modelBStat.inputTokens + modelBStat.outputTokens // 2 * (75000 + 5000) = 160000
-    const oldGrandTotal = oldTotalA + oldTotalB // 175000
-    const oldShareA = (oldTotalA / oldGrandTotal) * 100
-    const oldShareB = (oldTotalB / oldGrandTotal) * 100
+    // Use the production layout function to get sorted stats and total
+    const { sortedStats, totalModelTokens } = computeModelsTabLayout(stats)
 
-    // Assert that under the old logic, the brief modelB would incorrectly dominate the workhorse modelA
-    expect(oldShareB).toBeGreaterThan(oldShareA)
-    expect(oldShareB).toBeCloseTo(91.4, 1)
-    expect(oldShareA).toBeCloseTo(8.6, 1)
+    // Total model tokens (input+output across all models)
+    // modelA: inputTokens=10000, outputTokens=5000  → 15000
+    // modelB: inputTokens=150000, outputTokens=10000 → 160000
+    // total = 175000
+    expect(totalModelTokens).toBe(175000)
 
-    // New Correct Logic Assessment:
-    // New logic: computes share based on visibleOutputTokens
-    const newTotalA = modelAStat.visibleOutputTokens // 10 * 238 = 2380
-    const newTotalB = modelBStat.visibleOutputTokens // 2 * 5 = 10
-    const newGrandTotal = newTotalA + newTotalB // 2390
-    const newShareA = (newTotalA / newGrandTotal) * 100
-    const newShareB = (newTotalB / newGrandTotal) * 100
+    // Assert that modelB legitimately outranks modelA on % tokens
+    // (cold-cache tax IS real billed usage — this is intentional)
+    const modelATokens = modelAStat.inputTokens + modelAStat.outputTokens // 15000
+    const modelBTokens = modelBStat.inputTokens + modelBStat.outputTokens // 160000
+    const modelAPct = (modelATokens / totalModelTokens) * 100
+    const modelBPct = (modelBTokens / totalModelTokens) * 100
 
-    // Assert that under the new correct logic:
-    // - modelA correctly has a much larger conversation share than modelB
-    expect(newShareA).toBeGreaterThan(newShareB)
-    expect(newShareA).toBeCloseTo(99.58, 1)
-    expect(newShareB).toBeCloseTo(0.42, 1)
+    expect(modelBPct).toBeGreaterThan(modelAPct)
+    expect(modelBPct).toBeCloseTo(91.4, 1)
+    expect(modelAPct).toBeCloseTo(8.6, 1)
 
-    // - The output tokens (↓) display is based on visibleOutputTokens, not raw outputTokens
+    // Sort order: modelB (160000 tokens) first, modelA (15000) second
+    expect(sortedStats[0].modelID).toBe("gpt-4o")
+    expect(sortedStats[1].modelID).toBe("claude-3-5-sonnet")
+
+    // msgCount counterbalances: modelA has 10 msgs vs modelB's 2
+    expect(modelAStat.msgCount).toBe(10)
+    expect(modelBStat.msgCount).toBe(2)
+
+    // visibleOutputTokens and outputTokens remain correct for ↓ display
     expect(modelAStat.visibleOutputTokens).toBe(2380)
     expect(modelBStat.visibleOutputTokens).toBe(10)
     expect(modelAStat.outputTokens).toBe(5000)
@@ -400,7 +404,15 @@ describe("Models Tab Token Share Regression Test", () => {
 // ─── Models Tab Input Tokens Last-Value-Wins Regression Test ──────────────────
 
 describe("Models Tab Input Tokens Last-Value-Wins Regression Test", () => {
-  it("verifies that input token display for warm-cache workhorse modelA is not dwarfed by cold-cache switch modelB", () => {
+  it("verifies that input token display (↑) uses lastCallRawPromptTokens (last-call reconstructed raw prompt) per the /usage-mirror scheme, preventing cold-cache spike from dwarfing the workhorse model", () => {
+    // Under the /usage-mirror scheme, the ↑ display shows lastCallRawPromptTokens
+    // (reconstructed raw prompt of the chronologically last call for each model).
+    // This avoids double-counting the same accumulated context on every turn and
+    // reflects the true scale of the conversation's active state. By contrast,
+    // summing tokens.input across all turns would unfairly dwarf the warm-cache
+    // workhorse (whose per-turn input deltas are small) vs the cold-cache switch
+    // model (whose first-turn input includes the full context).
+
     // 1. Simulate modelA (workhorse): 10 turns, growing warm cache, small input deltas.
     const modelARecords: ModelUsageRecord[] = []
     for (let i = 0; i < 10; i++) {
@@ -460,10 +472,7 @@ describe("Models Tab Input Tokens Last-Value-Wins Regression Test", () => {
       }
     ]
 
-    // Combine records
     const allRecords = [...modelARecords, ...modelBRecords]
-
-    // Aggregate stats per model group (just like analyze.tsx does)
     const stats = aggregateModelStats(allRecords)
     const modelAStat = stats.find(s => s.modelID === "claude-3-5-sonnet")!
     const modelBStat = stats.find(s => s.modelID === "gpt-4o")!
@@ -471,37 +480,26 @@ describe("Models Tab Input Tokens Last-Value-Wins Regression Test", () => {
     expect(modelAStat).toBeDefined()
     expect(modelBStat).toBeDefined()
 
-    // Old Buggy Logic: Summed input tokens per model (Σ tokens.input)
-    // modelA's summed input is small because of the warm cache hit rate (each turn only pays for delta).
-    // modelB's summed input has a huge spike from the cold cache model switch.
-    const oldInputDisplayA = modelAStat.inputTokens // sum of modelA inputTokens
-    const oldInputDisplayB = modelBStat.inputTokens // sum of modelB inputTokens
+    // The lastCallRawPromptTokens field is still present and works correctly (not dropped)
+    // modelA last call: input=1900, cacheRead=74000 → lastCallRawPromptTokens = 75900
+    // modelB last call: input=15000, cacheRead=60000 → lastCallRawPromptTokens = 75000
+    const inputDisplayA = modelAStat.lastCallRawPromptTokens
+    const inputDisplayB = modelBStat.lastCallRawPromptTokens
 
-    // Assert that under the old buggy logic, modelB's summed input would incorrectly show a MUCH larger number than modelA's
-    // modelA input sum = 1000 + 1100 + ... + 1900 = 14500
-    // modelB input sum = 75000 + 15000 = 90000
-    expect(oldInputDisplayA).toBe(14500)
-    expect(oldInputDisplayB).toBe(90000)
-    expect(oldInputDisplayB).toBeGreaterThan(oldInputDisplayA)
+    // modelA's display reflects its own last call's reconstructed raw prompt size
+    // (sizable, reflecting the full conversation scale)
+    expect(inputDisplayA).toBe(75900)
 
-    // New Correct Logic: Display lastCallRawPromptTokens (using last call raw prompt size)
-    // modelA last call: input=1900, cacheRead=74000 -> lastCallRawPromptTokens = 75900
-    // modelB last call: input=15000, cacheRead=60000 -> lastCallRawPromptTokens = 75000
-    const newInputDisplayA = modelAStat.lastCallRawPromptTokens
-    const newInputDisplayB = modelBStat.lastCallRawPromptTokens
+    // modelB's display reflects only ITS last call's reconstructed size,
+    // NOT the inflated first-call spike, and NOT a sum of both calls
+    expect(inputDisplayB).toBe(75000)
+    expect(inputDisplayB).not.toBe(150000) // not sum of both calls' reconstructed prompt tokens
+    expect(inputDisplayB).not.toBe(90000) // not sum of input tokens
+    expect(inputDisplayB).not.toBe(75000 + 75000) // not summed reconstructed prompt tokens
 
-    // Assert that under the new correct logic:
-    // - modelA's display reflects its own last call's reconstructed raw prompt size (which is sizable, reflecting the full conversation scale)
-    expect(newInputDisplayA).toBe(75900)
-
-    // - modelB's display reflects only ITS last call's reconstructed size, NOT the inflated first-call spike, and NOT a sum of both calls
-    expect(newInputDisplayB).toBe(75000)
-    expect(newInputDisplayB).not.toBe(150000) // not sum of both calls' reconstructed prompt tokens
-    expect(newInputDisplayB).not.toBe(90000) // not sum of input tokens
-    expect(newInputDisplayB).not.toBe(75000 + 75000) // not summed reconstructed prompt tokens
-
-    // - The input display comparison now reflects the correct relative context weight
-    expect(newInputDisplayA).toBeGreaterThan(newInputDisplayB!)
+    // The input display comparison correctly reflects relative context weight:
+    // modelA's warm-cache last call (75900) exceeds modelB's second call (75000)
+    expect(inputDisplayA).toBeGreaterThan(inputDisplayB!)
   })
 })
 
@@ -717,5 +715,64 @@ describe("Models Tab Degenerate Last Call Regression Test", () => {
     expect(stats.length).toBe(1)
     expect(stats[0].modelID).toBe("o1-mini")
     expect(stats[0].msgCount).toBe(1)
+
+    // Reasoning-only models (input=0, output=0, reasoning>0) show pct=0
+    // mirroring /usage which also excludes reasoning from its SQL. Accepted edge case.
+    const { totalModelTokens } = computeModelsTabLayout(stats)
+    expect(totalModelTokens).toBe(0) // input+output = 0 for reasoning-only
+  })
+})
+
+// ─── 0% Bug Regression — Tool-Only Model ──────────────────────────────────
+
+describe("0% Bug Regression — Tool-Only Model", () => {
+  it("verifies a tool-only model (no visible prose) gets pct > 0 under the new input+output scheme", () => {
+    // CRITICAL REGRESSION TEST: Under the old visibleOutput-based scheme, a model
+    // that only produces tool-call parts (no text parts) would show pct = 0 because
+    // visibleOutputTokens = 0. Under the new input+output (/usage-mirror) scheme,
+    // the model correctly gets pct > 0 because inputTokens + outputTokens > 0.
+
+    // Simulate modelC with only tool-call parts — no text parts at all.
+    const modelCRecords: ModelUsageRecord[] = [
+      {
+        providerID: "anthropic",
+        modelID: "claude-opus-4",
+        inputTokens: 5000,
+        outputTokens: 2000,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: 0.05,
+        visibleOutputTokens: 0, // no text parts → 0 visible output tokens
+      },
+      {
+        providerID: "anthropic",
+        modelID: "claude-opus-4",
+        inputTokens: 3000,
+        outputTokens: 1500,
+        cacheRead: 1000,
+        cacheWrite: 0,
+        cost: 0.03,
+        visibleOutputTokens: 0, // tool-call only, still no visible prose
+      },
+    ]
+
+    const stats = aggregateModelStats(modelCRecords)
+    expect(stats.length).toBe(1)
+    expect(stats[0].visibleOutputTokens).toBe(0) // no visible prose
+
+    // Under the new scheme: pct is based on input+output
+    const { sortedStats, totalModelTokens } = computeModelsTabLayout(stats)
+
+    // totalModelTokens = (5000+3000) + (2000+1500) = 11500
+    expect(totalModelTokens).toBe(11500)
+
+    const modelTokens = stats[0].inputTokens + stats[0].outputTokens
+    const pct = totalModelTokens > 0 ? (modelTokens / totalModelTokens) * 100 : 0
+
+    // THE KEY ASSERTION: pct > 0, NOT 0!
+    expect(pct).toBeGreaterThan(0)
+    expect(pct).toBe(100) // only one model, so 100%
+    expect(sortedStats[0].modelID).toBe("claude-opus-4")
+    expect(sortedStats.length).toBe(1)
   })
 })

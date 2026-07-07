@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test"
-import { summarizeCompactions, type CompactionEvent } from "@model-usage/helpers/compaction"
+import { summarizeCompactions, resolveCompactionEvents, type CompactionEvent } from "@model-usage/helpers/compaction"
 
 // ─── summarizeCompactions ───────────────────────────────────────────────────
 
@@ -56,5 +56,90 @@ describe("summarizeCompactions", () => {
       { beforeTokens: -200, afterTokens: -100 }, // -200 - (-100) = -100 -> clamped to 0
     ]
     expect(summarizeCompactions(negativeValues)).toEqual({ count: 2, measured: 2, reductionTokens: 100 })
+  })
+})
+
+// ─── resolveCompactionEvents ─────────────────────────────────────────────────
+
+describe("resolveCompactionEvents", () => {
+  it("resolves after from next assistant rawPrompt after compaction", () => {
+    const messages = [
+      { id: "msg1", info: { role: "assistant", providerID: "p", modelID: "m", tokens: { input: 1000, output: 200, cache: { read: 49000, write: 0 } } }, parts: [] },
+      { id: "msg_comp", info: { role: "user" }, parts: [{ type: "compaction" }, { type: "text", text: "summary..." }] },
+      { id: "msg2", info: { role: "assistant", providerID: "p", modelID: "m", tokens: { input: 8000, output: 300, cache: { read: 0, write: 0 } } }, parts: [] },
+    ]
+    const { events, summary } = resolveCompactionEvents(messages)
+    expect(events).toHaveLength(1)
+    expect(events[0].beforeTokens).toBe(50000) // 1000 + 49000 + 0
+    expect(events[0].afterTokens).toBe(8000)   // 8000 + 0 + 0
+    expect(summary.count).toBe(1)
+    expect(summary.measured).toBe(1)
+    expect(summary.reductionTokens).toBe(42000) // 50000 - 8000
+  })
+
+  it("trailing compaction leaves after undefined (counted, not measured)", () => {
+    const messages = [
+      { id: "msg1", info: { role: "assistant", providerID: "p", modelID: "m", tokens: { input: 1000, output: 200, cache: { read: 49000, write: 0 } } }, parts: [] },
+      { id: "msg_comp", info: { role: "user" }, parts: [{ type: "compaction" }, { type: "text", text: "summary..." }] },
+    ]
+    const { events, summary } = resolveCompactionEvents(messages)
+    expect(events).toHaveLength(1)
+    expect(events[0].beforeTokens).toBe(50000)
+    expect(events[0].afterTokens).toBeUndefined()
+    expect(summary.count).toBe(1)
+    expect(summary.measured).toBe(0)
+    expect(summary.reductionTokens).toBe(0)
+  })
+
+  it("leading compaction (no prior assistant) sets before=0", () => {
+    const messages = [
+      { id: "msg_comp", info: { role: "user" }, parts: [{ type: "compaction" }, { type: "text", text: "summary..." }] },
+      { id: "msg1", info: { role: "assistant", providerID: "p", modelID: "m", tokens: { input: 8000, output: 300, cache: { read: 0, write: 0 } } }, parts: [] },
+    ]
+    const { events, summary } = resolveCompactionEvents(messages)
+    expect(events).toHaveLength(1)
+    expect(events[0].beforeTokens).toBe(0)
+    expect(events[0].afterTokens).toBe(8000)
+    expect(summary.count).toBe(1)
+    expect(summary.measured).toBe(1)
+  })
+
+  it("mixed resolvable and unresolved compaction events", () => {
+    const messages = [
+      { id: "msg1", info: { role: "assistant", providerID: "p", modelID: "m", tokens: { input: 1000, output: 200, cache: { read: 49000, write: 0 } } }, parts: [] },
+      { id: "comp1", info: { role: "user" }, parts: [{ type: "compaction" }, { type: "text", text: "summary..." }] },
+      { id: "msg2", info: { role: "assistant", providerID: "p", modelID: "m", tokens: { input: 8000, output: 300, cache: { read: 0, write: 0 } } }, parts: [] },
+      { id: "comp2", info: { role: "user" }, parts: [{ type: "compaction" }, { type: "text", text: "summary..." }] },
+    ]
+    const { events, summary } = resolveCompactionEvents(messages)
+    expect(events).toHaveLength(2)
+    // compaction1 resolved
+    expect(events[0].beforeTokens).toBe(50000)
+    expect(events[0].afterTokens).toBe(8000)
+    // compaction2 unresolved
+    expect(events[1].beforeTokens).toBe(8000)
+    expect(events[1].afterTokens).toBeUndefined()
+    // Summary
+    expect(summary.count).toBe(2)
+    expect(summary.measured).toBe(1) // only compaction1 has afterTokens
+    expect(summary.reductionTokens).toBe(42000) // only from compaction1
+  })
+
+  it("title-gen call skipped for after", () => {
+    // assistant(real, 50000) → compaction → assistant(title-gen, 0) → assistant(real, 8000)
+    const messages = [
+      { id: "msg1", info: { role: "assistant", providerID: "p", modelID: "m", tokens: { input: 1000, output: 200, cache: { read: 49000, write: 0 } } }, parts: [] },
+      { id: "comp", info: { role: "user" }, parts: [{ type: "compaction" }, { type: "text", text: "summary..." }] },
+      { id: "title_gen", info: { role: "assistant", providerID: "p", modelID: "m-title", tokens: { input: 0, output: 50, cache: { read: 0, write: 0 } } }, parts: [{ type: "text", text: "Title" }] },
+      { id: "msg2", info: { role: "assistant", providerID: "p", modelID: "m", tokens: { input: 8000, output: 300, cache: { read: 0, write: 0 } } }, parts: [] },
+    ]
+    const { events, summary } = resolveCompactionEvents(messages)
+    expect(events).toHaveLength(1)
+    // after should be from the second real assistant (8000), not the title-gen stub
+    expect(events[0].beforeTokens).toBe(50000)
+    expect(events[0].afterTokens).toBe(8000)
+    expect(summary.count).toBe(1)
+    expect(summary.measured).toBe(1)
+    expect(summary.reductionTokens).toBe(42000) // 50000 - 8000
   })
 })

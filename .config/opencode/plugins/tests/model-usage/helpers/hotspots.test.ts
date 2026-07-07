@@ -141,6 +141,98 @@ describe("detectHotspots", () => {
     expect(results[1].label).toBe("l2")
   })
 
+  it("single candidate per category — no hotspot (can't be outlier alone)", () => {
+    const candidates: HotspotCandidate[] = [
+      { category: "catA", label: "l1", tokens: 1000, preview: "p", fullText: "f" },
+    ]
+    const results = detectHotspots({ catA: candidates })
+    expect(results.length).toBe(0)
+  })
+
+  it("all equal tokens — no hotspot", () => {
+    const candidates: HotspotCandidate[] = [
+      { category: "catA", label: "l1", tokens: 100, preview: "p", fullText: "f" },
+      { category: "catA", label: "l2", tokens: 100, preview: "p", fullText: "f" },
+      { category: "catA", label: "l3", tokens: 100, preview: "p", fullText: "f" },
+      { category: "catA", label: "l4", tokens: 100, preview: "p", fullText: "f" },
+      { category: "catA", label: "l5", tokens: 100, preview: "p", fullText: "f" },
+    ]
+    const results = detectHotspots({ catA: candidates })
+    expect(results.length).toBe(0)
+  })
+
+  it("exactly 2x median — not flagged (strict >)", () => {
+    const candidates: HotspotCandidate[] = [
+      { category: "catA", label: "l1", tokens: 100, preview: "p", fullText: "f" },
+      { category: "catA", label: "l2", tokens: 100, preview: "p", fullText: "f" },
+      { category: "catA", label: "l3", tokens: 200, preview: "p", fullText: "f" },
+    ]
+    // median = 100, threshold = 200. 200 is NOT strictly > 200.
+    const results = detectHotspots({ catA: candidates })
+    expect(results.length).toBe(0)
+  })
+
+  it("cap of 5 — only top 5 by ratio returned", () => {
+    // Need enough base items so median stays low and outliers are detected
+    // 8 base items with tokens=10, 4 outliers per category → median = 10, threshold = 20
+    const bases = Array.from({ length: 8 }, (_, i) => ({
+      category: "catA" as const,
+      label: `base${i}`,
+      tokens: 10,
+      preview: "p",
+      fullText: "f",
+    }))
+    const catAOutliers: HotspotCandidate[] = [
+      { category: "catA", label: "outlier1000", tokens: 1000, preview: "p", fullText: "f" },
+      { category: "catA", label: "outlier900", tokens: 900, preview: "p", fullText: "f" },
+      { category: "catA", label: "outlier800", tokens: 800, preview: "p", fullText: "f" },
+      { category: "catA", label: "outlier700", tokens: 700, preview: "p", fullText: "f" },
+    ]
+    const basesB = Array.from({ length: 8 }, (_, i) => ({
+      category: "catB" as const,
+      label: `baseB${i}`,
+      tokens: 10,
+      preview: "p",
+      fullText: "f",
+    }))
+    const catBOutliers: HotspotCandidate[] = [
+      { category: "catB", label: "outlier600", tokens: 600, preview: "p", fullText: "f" },
+      { category: "catB", label: "outlier500", tokens: 500, preview: "p", fullText: "f" },
+      { category: "catB", label: "outlier400", tokens: 400, preview: "p", fullText: "f" },
+      { category: "catB", label: "outlier300", tokens: 300, preview: "p", fullText: "f" },
+    ]
+    const results = detectHotspots({ catA: [...bases, ...catAOutliers], catB: [...basesB, ...catBOutliers] })
+    expect(results.length).toBe(5)
+  })
+
+  it("cross-category merge sorted by ratio desc", () => {
+    const catA: HotspotCandidate[] = [
+      { category: "USER", label: "user_query", tokens: 10, preview: "p", fullText: "f" },
+      { category: "USER", label: "user_query2", tokens: 10, preview: "p", fullText: "f" },
+      { category: "USER", label: "big_query", tokens: 50, preview: "p", fullText: "f" }, // median=10, ratio=5
+    ]
+    const catB: HotspotCandidate[] = [
+      { category: "TOOLS", label: "tool_call", tokens: 10, preview: "p", fullText: "f" },
+      { category: "TOOLS", label: "tool_call2", tokens: 10, preview: "p", fullText: "f" },
+      { category: "TOOLS", label: "big_tool", tokens: 100, preview: "p", fullText: "f" }, // median=10, ratio=10
+    ]
+    const results = detectHotspots({ USER: catA, TOOLS: catB })
+    expect(results.length).toBe(2)
+    expect(results[0].category).toBe("TOOLS")
+    expect(results[0].ratio).toBe(10)
+    expect(results[1].category).toBe("USER")
+    expect(results[1].ratio).toBe(5)
+  })
+
+  it("category with median 0 is skipped", () => {
+    const candidates: HotspotCandidate[] = [
+      { category: "catA", label: "l1", tokens: 0, preview: "p", fullText: "f" },
+      { category: "catA", label: "l2", tokens: 0, preview: "p", fullText: "f" },
+    ]
+    const results = detectHotspots({ catA: candidates })
+    expect(results.length).toBe(0)
+  })
+
   it("respects default cap of 5", () => {
     // Create 7 candidates that qualify as outliers with median = 10 (since we have 10 base items of 10)
     const candidates: HotspotCandidate[] = [

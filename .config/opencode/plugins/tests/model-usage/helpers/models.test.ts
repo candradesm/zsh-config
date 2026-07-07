@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test"
 import { aggregateModelStats } from "@model-usage/helpers/models"
 import type { ModelUsageRecord, ModelStat } from "@model-usage/helpers/models"
+import { countModelSwitches, computeModelsTabLayout } from "@model-usage/helpers/model-tab"
 
 // ─── aggregateModelStats ─────────────────────────────────────────────────────
 
@@ -586,5 +587,138 @@ describe("aggregateModelStats", () => {
         lastCallRawPromptTokens: 25000, // retains prior value
       })
     })
+  })
+})
+
+// ─── countModelSwitches ─────────────────────────────────────────────────────
+
+describe("countModelSwitches", () => {
+  it("returns 0 when all messages use the same model (no switches)", () => {
+    const messages = Array.from({ length: 5 }, (_, i) => ({
+      id: `msg${i}`,
+      info: { role: "assistant", providerID: "a", modelID: "m1", tokens: { input: 100, output: 50, cache: { read: 0, write: 0 } } },
+    }))
+    expect(countModelSwitches(messages)).toBe(0)
+  })
+
+  it("detects 1 switch when model changes once", () => {
+    const messages = [
+      { id: "msg1", info: { role: "assistant", providerID: "a", modelID: "m1", tokens: { input: 100, output: 50, cache: { read: 0, write: 0 } } } },
+      { id: "msg2", info: { role: "assistant", providerID: "a", modelID: "m1", tokens: { input: 100, output: 50, cache: { read: 0, write: 0 } } } },
+      { id: "msg3", info: { role: "assistant", providerID: "a", modelID: "m1", tokens: { input: 100, output: 50, cache: { read: 0, write: 0 } } } },
+      { id: "msg4", info: { role: "assistant", providerID: "a", modelID: "m2", tokens: { input: 100, output: 50, cache: { read: 0, write: 0 } } } },
+      { id: "msg5", info: { role: "assistant", providerID: "a", modelID: "m2", tokens: { input: 100, output: 50, cache: { read: 0, write: 0 } } } },
+    ]
+    expect(countModelSwitches(messages)).toBe(1)
+  })
+
+  it("detects 3 switches for A→B→A→B pattern", () => {
+    const messages = [
+      { id: "msg1", info: { role: "assistant", providerID: "a", modelID: "m1", tokens: { input: 100, output: 50, cache: { read: 0, write: 0 } } } },
+      { id: "msg2", info: { role: "assistant", providerID: "b", modelID: "m2", tokens: { input: 100, output: 50, cache: { read: 0, write: 0 } } } },
+      { id: "msg3", info: { role: "assistant", providerID: "a", modelID: "m1", tokens: { input: 100, output: 50, cache: { read: 0, write: 0 } } } },
+      { id: "msg4", info: { role: "assistant", providerID: "b", modelID: "m2", tokens: { input: 100, output: 50, cache: { read: 0, write: 0 } } } },
+    ]
+    expect(countModelSwitches(messages)).toBe(3)
+  })
+
+  it("skips title-gen calls (rawPromptTokens === 0) when counting switches", () => {
+    // A(real) → A(title-gen, rawPrompt=0) → B(real)
+    // Title-gen should be IGNORED — only A→B = 1 switch, not A→title-gen + title-gen→B = 2
+    const messages = [
+      { id: "msg1", info: { role: "assistant", providerID: "p", modelID: "m1", tokens: { input: 500, output: 200, cache: { read: 0, write: 0 } } } },
+      { id: "msg_title", info: { role: "assistant", providerID: "p", modelID: "m-title", tokens: { input: 0, output: 200, cache: { read: 0, write: 0 } } } },
+      { id: "msg2", info: { role: "assistant", providerID: "p", modelID: "m2", tokens: { input: 300, output: 100, cache: { read: 0, write: 0 } } } },
+    ]
+    expect(countModelSwitches(messages)).toBe(1)
+  })
+
+  it("skips non-assistant messages (user role) entirely", () => {
+    const messages = [
+      { id: "m1", info: { role: "assistant", providerID: "a", modelID: "m1", tokens: { input: 100, output: 50, cache: { read: 0, write: 0 } } } },
+      { id: "u1", info: { role: "user" } },
+      { id: "m2", info: { role: "assistant", providerID: "a", modelID: "m2", tokens: { input: 100, output: 50, cache: { read: 0, write: 0 } } } },
+    ]
+    // user message in between should not break the switch detection
+    expect(countModelSwitches(messages)).toBe(1)
+  })
+
+  it("skips messages without providerID/modelID", () => {
+    const messages = [
+      { id: "m1", info: { role: "assistant", providerID: "a", modelID: "m1", tokens: { input: 100, output: 50, cache: { read: 0, write: 0 } } } },
+      { id: "no_provider", info: { role: "assistant", modelID: "m2", tokens: { input: 100, output: 50, cache: { read: 0, write: 0 } } } },
+      { id: "no_model", info: { role: "assistant", providerID: "a", tokens: { input: 100, output: 50, cache: { read: 0, write: 0 } } } },
+      { id: "m2", info: { role: "assistant", providerID: "b", modelID: "m2", tokens: { input: 100, output: 50, cache: { read: 0, write: 0 } } } },
+    ]
+    // Messages without providerID/modelID are skipped — switch is A→B = 1
+    expect(countModelSwitches(messages)).toBe(1)
+  })
+})
+
+// ─── computeModelsTabLayout ─────────────────────────────────────────────────
+
+describe("computeModelsTabLayout", () => {
+  it("sorts by modelTokens (input+output) descending", () => {
+    const stats: ModelStat[] = [
+      { providerID: "p", modelID: "A", msgCount: 1, inputTokens: 1000, outputTokens: 500, cacheRead: 0, cacheWrite: 0, cost: 0.01, visibleOutputTokens: 400 },
+      { providerID: "p", modelID: "B", msgCount: 1, inputTokens: 500, outputTokens: 200, cacheRead: 0, cacheWrite: 0, cost: 0.005, visibleOutputTokens: 150 },
+    ]
+    const { sortedStats } = computeModelsTabLayout(stats)
+    expect(sortedStats[0].modelID).toBe("A")
+    expect(sortedStats[1].modelID).toBe("B")
+  })
+
+  it("falls back to msgCount desc when modelTokens are equal", () => {
+    const stats: ModelStat[] = [
+      { providerID: "p", modelID: "A", msgCount: 3, inputTokens: 500, outputTokens: 500, cacheRead: 0, cacheWrite: 0, cost: 0.01, visibleOutputTokens: 400 },
+      { providerID: "p", modelID: "B", msgCount: 5, inputTokens: 500, outputTokens: 500, cacheRead: 0, cacheWrite: 0, cost: 0.01, visibleOutputTokens: 400 },
+    ]
+    const { sortedStats } = computeModelsTabLayout(stats)
+    // B has higher msgCount, so B should come first
+    expect(sortedStats[0].modelID).toBe("B")
+    expect(sortedStats[1].modelID).toBe("A")
+  })
+
+  it("falls back to modelID asc when modelTokens and msgCount are equal", () => {
+    const stats: ModelStat[] = [
+      { providerID: "p", modelID: "bbb", msgCount: 1, inputTokens: 500, outputTokens: 500, cacheRead: 0, cacheWrite: 0, cost: 0.01, visibleOutputTokens: 400 },
+      { providerID: "p", modelID: "aaa", msgCount: 1, inputTokens: 500, outputTokens: 500, cacheRead: 0, cacheWrite: 0, cost: 0.01, visibleOutputTokens: 400 },
+    ]
+    const { sortedStats } = computeModelsTabLayout(stats)
+    // "p/aaa" < "p/bbb", so aaa comes first
+    expect(sortedStats[0].modelID).toBe("aaa")
+    expect(sortedStats[1].modelID).toBe("bbb")
+  })
+
+  it("computes totalModelTokens correctly", () => {
+    const stats: ModelStat[] = [
+      { providerID: "p", modelID: "A", msgCount: 1, inputTokens: 1000, outputTokens: 500, cacheRead: 0, cacheWrite: 0, cost: 0.01, visibleOutputTokens: 400 },
+      { providerID: "p", modelID: "B", msgCount: 1, inputTokens: 500, outputTokens: 200, cacheRead: 0, cacheWrite: 0, cost: 0.005, visibleOutputTokens: 150 },
+    ]
+    const { totalModelTokens } = computeModelsTabLayout(stats)
+    expect(totalModelTokens).toBe(2200) // (1000+500) + (500+200)
+  })
+
+  it("computes correct percentage per model", () => {
+    const stats: ModelStat[] = [
+      { providerID: "p", modelID: "A", msgCount: 1, inputTokens: 1000, outputTokens: 500, cacheRead: 0, cacheWrite: 0, cost: 0.01, visibleOutputTokens: 400 },
+      { providerID: "p", modelID: "B", msgCount: 1, inputTokens: 500, outputTokens: 200, cacheRead: 0, cacheWrite: 0, cost: 0.005, visibleOutputTokens: 150 },
+    ]
+    const { sortedStats, totalModelTokens } = computeModelsTabLayout(stats)
+    const pctA = ((sortedStats[0].inputTokens + sortedStats[0].outputTokens) / totalModelTokens) * 100
+    const pctB = ((sortedStats[1].inputTokens + sortedStats[1].outputTokens) / totalModelTokens) * 100
+    expect(pctA).toBeCloseTo(68.18, 1)
+    expect(pctB).toBeCloseTo(31.82, 1)
+  })
+
+  it("single model returns pct=100", () => {
+    const stats: ModelStat[] = [
+      { providerID: "p", modelID: "A", msgCount: 1, inputTokens: 300, outputTokens: 200, cacheRead: 0, cacheWrite: 0, cost: 0.01, visibleOutputTokens: 400 },
+    ]
+    const { sortedStats, totalModelTokens } = computeModelsTabLayout(stats)
+    expect(sortedStats.length).toBe(1)
+    expect(totalModelTokens).toBe(500)
+    const pct = ((sortedStats[0].inputTokens + sortedStats[0].outputTokens) / totalModelTokens) * 100
+    expect(pct).toBe(100)
   })
 })
