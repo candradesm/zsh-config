@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test"
-import { estimateTokens, rawPromptTokens, scaleEntries } from "./helpers/tokens"
+import { estimateTokens, estimateVisibleOutputTokens, rawPromptTokens, scaleEntries } from "./helpers/tokens"
+import { aggregateModelStats } from "./helpers/models"
 import { splitSystemFragments } from "./helpers/fragments"
 import { loadBaseline } from "./db"
 import { truncateLabel } from "./helpers/format"
@@ -303,5 +304,94 @@ describe("truncateLabel", () => {
 
   it("handles empty string", () => {
     expect(truncateLabel("", 26)).toBe(" ".repeat(26))
+  })
+})
+
+// ─── Models Tab Token Share Regression Test ───────────────────────────────────
+
+describe("Models Tab Token Share Regression Test", () => {
+  it("verifies that modelB (minority switched model) does not skew share or output tokens over modelA (workhorse)", () => {
+    // 1. Simulate modelA (workhorse): 10 turns, small input deltas, growing cache, large visible text, moderate output payload.
+    const modelARecords: any[] = []
+    for (let i = 0; i < 10; i++) {
+      const parts = [
+        { type: "text", text: "This is substantial visible assistant prose written by modelA to prove it carried the session. ".repeat(10) }
+      ]
+      // 94 chars * 10 repeats = 940 chars per turn.
+      // 940 / 4 = 235 visible output tokens.
+      modelARecords.push({
+        providerID: "anthropic",
+        modelID: "claude-3-5-sonnet",
+        inputTokens: 1000,
+        outputTokens: 500,
+        cacheRead: 5000 + i * 1000,
+        cacheWrite: 0,
+        cost: 0.005,
+        visibleOutputTokens: estimateVisibleOutputTokens(parts),
+      })
+    }
+
+    // 2. Simulate modelB (minority): 2 turns, massive input spike (cache invalidation), short visible text, huge output (tool JSON).
+    const modelBRecords: any[] = []
+    for (let i = 0; i < 2; i++) {
+      const parts = [
+        { type: "text", text: "Sure, let's proceed." }, // 20 chars -> 5 visible output tokens
+        { type: "tool-call", text: '{"some_massive_json_payload": "..."}' }, // should be ignored by visible tokens
+      ]
+      modelBRecords.push({
+        providerID: "openai",
+        modelID: "gpt-4o",
+        inputTokens: 75000,
+        outputTokens: 5000,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cost: 0.15,
+        visibleOutputTokens: estimateVisibleOutputTokens(parts),
+      })
+    }
+
+    // Combine all simulated records
+    const allRecords = [...modelARecords, ...modelBRecords]
+
+    // Aggregate stats per model group (just like analyze.tsx does)
+    const stats = aggregateModelStats(allRecords)
+    const modelAStat = stats.find(s => s.modelID === "claude-3-5-sonnet")!
+    const modelBStat = stats.find(s => s.modelID === "gpt-4o")!
+
+    expect(modelAStat).toBeDefined()
+    expect(modelBStat).toBeDefined()
+
+    // Old Buggy Logic Assessment:
+    // Old logic: computed share based on raw (inputTokens + outputTokens)
+    const oldTotalA = modelAStat.inputTokens + modelAStat.outputTokens // 10 * (1000 + 500) = 15000
+    const oldTotalB = modelBStat.inputTokens + modelBStat.outputTokens // 2 * (75000 + 5000) = 160000
+    const oldGrandTotal = oldTotalA + oldTotalB // 175000
+    const oldShareA = (oldTotalA / oldGrandTotal) * 100
+    const oldShareB = (oldTotalB / oldGrandTotal) * 100
+
+    // Assert that under the old logic, the brief modelB would incorrectly dominate the workhorse modelA
+    expect(oldShareB).toBeGreaterThan(oldShareA)
+    expect(oldShareB).toBeCloseTo(91.4, 1)
+    expect(oldShareA).toBeCloseTo(8.6, 1)
+
+    // New Correct Logic Assessment:
+    // New logic: computes share based on visibleOutputTokens
+    const newTotalA = modelAStat.visibleOutputTokens // 10 * 238 = 2380
+    const newTotalB = modelBStat.visibleOutputTokens // 2 * 5 = 10
+    const newGrandTotal = newTotalA + newTotalB // 2390
+    const newShareA = (newTotalA / newGrandTotal) * 100
+    const newShareB = (newTotalB / newGrandTotal) * 100
+
+    // Assert that under the new correct logic:
+    // - modelA correctly has a much larger conversation share than modelB
+    expect(newShareA).toBeGreaterThan(newShareB)
+    expect(newShareA).toBeCloseTo(99.58, 1)
+    expect(newShareB).toBeCloseTo(0.42, 1)
+
+    // - The output tokens (↓) display is based on visibleOutputTokens, not raw outputTokens
+    expect(modelAStat.visibleOutputTokens).toBe(2380)
+    expect(modelBStat.visibleOutputTokens).toBe(10)
+    expect(modelAStat.outputTokens).toBe(5000)
+    expect(modelBStat.outputTokens).toBe(10000)
   })
 })

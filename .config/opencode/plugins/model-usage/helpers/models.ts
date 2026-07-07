@@ -13,6 +13,7 @@ export interface ModelUsageRecord {
   cacheRead: number
   cacheWrite: number
   cost: number
+  visibleOutputTokens: number
 }
 
 export interface ModelStat {
@@ -24,6 +25,7 @@ export interface ModelStat {
   cacheRead: number
   cacheWrite: number
   cost: number
+  visibleOutputTokens: number
 }
 
 // ─── Aggregation ─────────────────────────────────────────────────────────────
@@ -47,6 +49,7 @@ export function aggregateModelStats(records: readonly ModelUsageRecord[]): Model
       existing.cacheRead += r.cacheRead
       existing.cacheWrite += r.cacheWrite
       existing.cost += r.cost
+      existing.visibleOutputTokens += r.visibleOutputTokens
     } else {
       groups.set(key, {
         providerID: r.providerID,
@@ -57,6 +60,7 @@ export function aggregateModelStats(records: readonly ModelUsageRecord[]): Model
         cacheRead: r.cacheRead,
         cacheWrite: r.cacheWrite,
         cost: r.cost,
+        visibleOutputTokens: r.visibleOutputTokens,
       })
     }
   }

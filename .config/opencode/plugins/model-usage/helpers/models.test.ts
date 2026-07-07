@@ -19,6 +19,7 @@ describe("aggregateModelStats", () => {
         cacheRead: 50,
         cacheWrite: 10,
         cost: 0.0015,
+        visibleOutputTokens: 150,
       },
     ]
 
@@ -33,6 +34,7 @@ describe("aggregateModelStats", () => {
         cacheRead: 50,
         cacheWrite: 10,
         cost: 0.0015,
+        visibleOutputTokens: 150,
       },
     ])
   })
@@ -47,6 +49,7 @@ describe("aggregateModelStats", () => {
         cacheRead: 50,
         cacheWrite: 10,
         cost: 0.0015,
+        visibleOutputTokens: 80,
       },
       {
         providerID: "anthropic",
@@ -56,6 +59,7 @@ describe("aggregateModelStats", () => {
         cacheRead: 20,
         cacheWrite: 0,
         cost: 0.002,
+        visibleOutputTokens: 120,
       },
       {
         providerID: "anthropic",
@@ -65,6 +69,7 @@ describe("aggregateModelStats", () => {
         cacheRead: 0,
         cacheWrite: 0,
         cost: 0.0005,
+        visibleOutputTokens: 30,
       },
     ]
 
@@ -79,6 +84,7 @@ describe("aggregateModelStats", () => {
         cacheRead: 70,
         cacheWrite: 10,
         cost: 0.004,
+        visibleOutputTokens: 230,
       },
     ])
   })
@@ -93,6 +99,7 @@ describe("aggregateModelStats", () => {
         cacheRead: 50,
         cacheWrite: 10,
         cost: 0.0015,
+        visibleOutputTokens: 150,
       },
       {
         providerID: "openai",
@@ -102,6 +109,7 @@ describe("aggregateModelStats", () => {
         cacheRead: 0,
         cacheWrite: 0,
         cost: 0.005,
+        visibleOutputTokens: 250,
       },
       {
         providerID: "openai",
@@ -111,6 +119,7 @@ describe("aggregateModelStats", () => {
         cacheRead: 0,
         cacheWrite: 0,
         cost: 0.0001,
+        visibleOutputTokens: 15,
       },
     ]
 
@@ -130,6 +139,7 @@ describe("aggregateModelStats", () => {
       cacheRead: 50,
       cacheWrite: 10,
       cost: 0.0015,
+      visibleOutputTokens: 150,
     })
 
     expect(openaiGpt4o).toEqual({
@@ -141,6 +151,7 @@ describe("aggregateModelStats", () => {
       cacheRead: 0,
       cacheWrite: 0,
       cost: 0.005,
+      visibleOutputTokens: 250,
     })
 
     expect(openaiGpt4oMini).toEqual({
@@ -152,6 +163,7 @@ describe("aggregateModelStats", () => {
       cacheRead: 0,
       cacheWrite: 0,
       cost: 0.0001,
+      visibleOutputTokens: 15,
     })
   })
 
@@ -165,6 +177,7 @@ describe("aggregateModelStats", () => {
         cacheRead: 0,
         cacheWrite: 0,
         cost: 0,
+        visibleOutputTokens: 0,
       },
     ]
 
@@ -179,6 +192,7 @@ describe("aggregateModelStats", () => {
         cacheRead: 0,
         cacheWrite: 0,
         cost: 0,
+        visibleOutputTokens: 0,
       },
     ])
   })
@@ -193,6 +207,7 @@ describe("aggregateModelStats", () => {
         cacheRead: 50,
         cacheWrite: 10,
         cost: 0.0015,
+        visibleOutputTokens: 120,
       },
       {
         providerID: "openrouter",
@@ -202,6 +217,7 @@ describe("aggregateModelStats", () => {
         cacheRead: 100,
         cacheWrite: 20,
         cost: 0.003,
+        visibleOutputTokens: 240,
       },
     ]
 
@@ -213,7 +229,9 @@ describe("aggregateModelStats", () => {
 
     expect(anthropic?.msgCount).toBe(1)
     expect(anthropic?.inputTokens).toBe(100)
+    expect(anthropic?.visibleOutputTokens).toBe(120)
     expect(openrouter?.msgCount).toBe(1)
     expect(openrouter?.inputTokens).toBe(200)
+    expect(openrouter?.visibleOutputTokens).toBe(240)
   })
 })

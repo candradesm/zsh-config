@@ -4,7 +4,7 @@ import { onMount, onCleanup, createSignal, createMemo } from "solid-js"
 import { existsSync, readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { log } from "./helpers/debug"
-import { estimateTokens, rawPromptTokens, scaleEntries } from "./helpers/tokens"
+import { estimateTokens, rawPromptTokens, scaleEntries, estimateVisibleOutputTokens } from "./helpers/tokens"
 import { buildBar, fmt, truncateLabel, fmtCompact, fmtCost } from "./helpers/format"
 import { writeClipboard } from "./helpers/clipboard"
 import { summarizeCompactions } from "./helpers/compaction"
@@ -308,6 +308,7 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                       cacheRead: asstInfo.tokens?.cache?.read ?? 0,
                       cacheWrite: asstInfo.tokens?.cache?.write ?? 0,
                       cost: asstInfo.cost ?? 0,
+                      visibleOutputTokens: estimateVisibleOutputTokens(parts),
                     })
                   }
                 }
@@ -385,14 +386,13 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                   const reasonTok = info?.tokens?.reasoning ?? 0
                   reasoningTelemetry += reasonTok
 
-                  const textParts = parts.filter((p: any) => p.type === "text")
-                  const text = textParts.map((p: any) => p.text ?? "").join("")
-                  if (text.trim().length > 0) {
+                  const visibleTokens = estimateVisibleOutputTokens(parts)
+                  if (visibleTokens > 0) {
                     assistantCounter++
-                    log("analyze: COUNT assistant msg", msgId, "-", text.length, "chars ->", estimateTokens(text), "(char/4 est.) tokens (Assistant #" + assistantCounter + ")")
+                    log("analyze: COUNT assistant msg", msgId, "-", visibleTokens, "visible tokens (Assistant #" + assistantCounter + ")")
                     assistantEntries.push({
                       label: `Assistant #${assistantCounter}`,
-                      tokens: estimateTokens(text),
+                      tokens: visibleTokens,
                     })
                   }
                 }
@@ -975,8 +975,23 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                         if (stats.length === 0) {
                           return <text fg={muted}>No model usage data.</text>
                         }
-                        const totalAcrossAllModels = stats.reduce((acc, st) => acc + (st.inputTokens + st.outputTokens), 0)
+
+                        // NOTE on Visible Assistant Output Share (%) (referred to as share in UI) and Output (↓) tokens:
+                        // We use `visibleOutputTokens` (char/4 visible text) for sorting, displaying ↓,
+                        // and computing visible assistant output share (%) rather than raw billed (input + output) tokens.
+                        // 1. Raw `inputTokens` are highly skewed by provider prompt-cache mechanics.
+                        //    When model/provider switches, cache resets to 0 (cold cache), charging the next
+                        //    model for the ENTIRE prior conversation history as input tokens.
+                        // 2. Raw `outputTokens` are contaminated by tool-call JSON payloads (e.g. large file
+                        //    writes/edits/diffs), which are already tracked in the TOOLS category.
+                        // Using `visibleOutputTokens` makes the percentage immune to prompt cache invalidation
+                        // tax and consistent with content produced in ASSISTANT messages.
+                        const totalVisibleOutputAcrossAllModels = stats.reduce((acc, st) => acc + st.visibleOutputTokens, 0)
                         const sortedStats = [...stats].sort((a, b) => {
+                          if (b.visibleOutputTokens !== a.visibleOutputTokens) {
+                            return b.visibleOutputTokens - a.visibleOutputTokens
+                          }
+                          // Fallback to total billed tokens if visible output tokens are equal
                           const totalA = a.inputTokens + a.outputTokens
                           const totalB = b.inputTokens + b.outputTokens
                           return totalB - totalA
@@ -988,18 +1003,17 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                             <text> </text>
                             <box flexDirection="column" gap={1}>
                               {sortedStats.map((m, i) => {
-                                const modelTokens = m.inputTokens + m.outputTokens
-                                const pct = totalAcrossAllModels > 0 ? (modelTokens / totalAcrossAllModels) * 100 : 0
+                                const pct = totalVisibleOutputAcrossAllModels > 0 ? (m.visibleOutputTokens / totalVisibleOutputAcrossAllModels) * 100 : 0
                                 const hitRate = calcCacheHitRate(m.cacheRead, m.inputTokens)
 
                                 const parts = [
                                   `↑ ${fmt(m.inputTokens)}`,
-                                  `↓ ${fmt(m.outputTokens)}`
+                                  `↓ ${fmt(m.visibleOutputTokens)}`
                                 ]
                                 if (hitRate !== null) {
                                   parts.push(`cache ${hitRate}%`)
                                 }
-                                parts.push(`${pct.toFixed(1)}% tokens`)
+                                parts.push(`${pct.toFixed(1)}% output share`)
                                 if (m.cost > 0) {
                                   parts.push(fmtCost(m.cost))
                                 }
