@@ -169,7 +169,29 @@ function buildHierarchy(rows: RawUsageRow[], monthStartMs: number, monthEndMs: n
     }
   }
 
-  const sortedDays = [...dayMap.values()].sort((a, b) => a.startMs - b.startMs)
+  // Fill in ALL days in the month range (including empty ones) so navigating
+  // to any day within a cached month is instant — no DB query for empty days.
+  const allDays: CachePeriod[] = []
+  for (let dayMs = monthStartMs; dayMs < monthEndMs; dayMs += MS_PER_DAY) {
+    const existing = dayMap.get(dayMs)
+    if (existing) {
+      allDays.push(existing)
+    } else {
+      allDays.push({
+        startMs: dayMs,
+        endMs: dayMs + MS_PER_DAY,
+        inputTokens: 0,
+        outputTokens: 0,
+        totalCost: 0,
+        change: null,
+        lastUpdated: Date.now(),
+        weeks: null,
+        days: null,
+        models: [],
+      })
+    }
+  }
+  const sortedDays = allDays
 
   // Compute per-model breakdown for each day from accumulated data
   for (const day of sortedDays) {
@@ -515,12 +537,13 @@ export function registerUsageCommand(api: TuiPluginApi) {
             if (gran === "month") {
               if (!forceRefresh) {
                 const fileCached = getMonthCache(startMs)
-                if (fileCached?.models && fileCached.models.length > 0) {
+                if (fileCached) {
+                  const models = fileCached.models ?? []
                   const isCurrent = isCurrentMonth(startMs)
                   const isStale = isCurrent && (Date.now() - fileCached.lastUpdated) >= CACHE_TTL_MS
                   if (!isStale) {
                     const data: UsageData = {
-                      models: fileCached.models,
+                      models,
                       totalInput: fileCached.inputTokens,
                       totalOutput: fileCached.outputTokens,
                       totalCost: fileCached.totalCost,
@@ -543,12 +566,13 @@ export function registerUsageCommand(api: TuiPluginApi) {
                 const monthCached = getMonthCache(monthStart)
                 const periodList = gran === "week" ? monthCached?.weeks : monthCached?.days
                 const period = periodList?.find(p => p.startMs === startMs)
-                if (period?.models && period.models.length > 0) {
+                if (period) {
+                  const models = period.models ?? []
                   const isCurrent = gran === "week" ? weekOffset() === 0 : dayOffset() === 0
                   const isStale = isCurrent && (Date.now() - period.lastUpdated) >= CACHE_TTL_MS
                   if (!isStale) {
                     const data: UsageData = {
-                      models: period.models,
+                      models,
                       totalInput: period.inputTokens,
                       totalOutput: period.outputTokens,
                       totalCost: period.totalCost,
@@ -574,7 +598,7 @@ export function registerUsageCommand(api: TuiPluginApi) {
                           const adjList2 = gran === "week" ? adjCached?.weeks : adjCached?.days
                           adjPeriod = adjList2?.find(p => p.startMs === adjStart)
                         }
-                        if (adjPeriod?.models && adjPeriod.models.length > 0) {
+                        if (adjPeriod) {
                           modelCache.set(adjKey, {
                             models: adjPeriod.models,
                             totalInput: adjPeriod.inputTokens,
