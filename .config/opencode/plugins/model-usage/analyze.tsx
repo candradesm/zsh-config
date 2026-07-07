@@ -15,6 +15,7 @@ import type { HotspotCandidate, HotspotResult } from "./helpers/hotspots"
 import { aggregateModelStats } from "./helpers/models"
 import type { ModelUsageRecord, ModelStat } from "./helpers/models"
 import { calcCacheHitRate } from "./helpers/cost"
+import { splitSystemFragments } from "./helpers/fragments"
 import { loadBaseline } from "./db"
 import type { SystemFragment, SystemSnapshot, SystemSource } from "./types"
 import { makeScrollState } from "./shared/scroll"
@@ -530,7 +531,14 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
               let systemTokens: number = 0
               let systemSource: SystemSource | null = null
               const serverTotal = serverSnapshot?.t ?? null
-              const serverFrags: SystemFragment[] = serverSnapshot?.fragments ?? []
+              // Re-split from rawText with the current splitSystemFragments logic.
+              // This makes fragment display immune to stale server-cached fragments
+              // (the server plugin may not re-capture on every restart if the system prompt
+              // hasn't changed materially, leaving old pre-PR#39 fragments in system-tokens.json).
+              const rawSysText = serverSnapshot?.rawText
+              const serverFrags: SystemFragment[] = rawSysText
+               ? splitSystemFragments(rawSysText)
+               : (serverSnapshot?.fragments ?? [])
 
               if (baselineTokens !== null) {
                 // Tier 1 — V2 baseline DB.
@@ -1025,8 +1033,8 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                                 const hitRate = calcCacheHitRate(m.cacheRead, m.inputTokens)
 
                                 const parts = [
-                                  `↑ ${fmt(m.lastCallRawPromptTokens ?? m.inputTokens)}`,
-                                  `↓ ${fmt(m.visibleOutputTokens)}`
+                                  `↑ ${fmt(m.inputTokens)}`,
+                                  `↓ ${fmt(m.outputTokens)}`
                                 ]
                                 if (hitRate !== null) {
                                   parts.push(`cache ${hitRate}%`)
