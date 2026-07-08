@@ -5,6 +5,8 @@ export interface ScrollState {
   hasOverflow: () => boolean
   handleUp: () => boolean
   handleDown: () => boolean
+  handlePageUp: () => boolean
+  handlePageDown: () => boolean
   checkOverflow: () => void
   scrollToTop: () => void
 }
@@ -47,6 +49,38 @@ export function makeScrollState(
     return true
   }
 
+  function handlePageUp(): boolean {
+    const el = scrollRef
+    if (!el || typeof el.scrollBy !== "function") return false
+    const ch = el.clientHeight ?? el.height ?? 40
+    const pageSize = Math.max(1, ch - 2)
+    el.scrollBy(0, -pageSize)
+    setIsAtBottom(false)
+    setTimeout(() => {
+        const top = scrollRef?.scrollTop ?? 0
+        if (top <= 0) setIsScrolled(false)
+        checkOverflow()
+    }, 50)
+    return true
+  }
+
+  function handlePageDown(): boolean {
+    const el = scrollRef
+    if (!el || typeof el.scrollBy !== "function") return false
+    const ch = el.clientHeight ?? el.height ?? 40
+    const pageSize = Math.max(1, ch - 2)
+    el.scrollBy(0, pageSize)
+    setIsScrolled(true)
+    setTimeout(() => {
+        const st = scrollRef?.scrollTop ?? 0
+        const ch2 = scrollRef?.clientHeight ?? scrollRef?.height ?? 40
+        const sh = scrollRef?.scrollHeight ?? 0
+        setIsAtBottom(st + ch2 >= sh - 5)
+        checkOverflow()
+    }, 50)
+    return true
+  }
+
   function scrollToTop() {
     if (scrollRef?.scrollTo) {
       try { scrollRef.scrollTo(0) } catch { /* ignore */ }
@@ -63,6 +97,8 @@ export function makeScrollState(
     hasOverflow,
     handleUp,
     handleDown,
+    handlePageUp,
+    handlePageDown,
     checkOverflow,
     scrollToTop,
   }

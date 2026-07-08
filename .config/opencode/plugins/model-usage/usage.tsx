@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs"
+import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { Database } from "bun:sqlite"
 
@@ -8,396 +8,12 @@ import { onMount, onCleanup, createSignal } from "solid-js"
 import { getMonthInfo, isCurrentMonth, getWeekMonday, getWeekInfo } from "./helpers/dates"
 import { fmt, fmtCost, buildBar, formatPercentDiff } from "./helpers/format"
 import type { UsageData, ModelUsage } from "./types"
-import { getEarliestUsageDate, fetchRawRows, queryUsage, MAX_MODELS, type RawUsageRow } from "./db"
+import { getEarliestUsageDate, fetchRawRows, queryUsage, MAX_MODELS } from "./db"
 import { makeScrollState } from "./shared/scroll"
 import { registerDialogKeyLayer } from "./shared/keys"
 
-export const MS_PER_DAY = 86_400_000
-const CACHE_TTL_MS = 60_000
-const PREFETCH_DELAY_MS = 100
-export const CACHE_VERSION = 3
-
-// ─── Types ─────────────────────────────────────────────────────────────────
-type Granularity = "month" | "week" | "day"
-
-export interface CachePeriod {
-  startMs: number
-  endMs: number
-  inputTokens: number
-  outputTokens: number
-  totalCost: number
-  change: number | null
-  lastUpdated: number
-  weeks: CachePeriod[] | null
-  days: CachePeriod[] | null
-  models: ModelUsage[] | null
-}
-
-export interface UsageCache {
-  version: number
-  months: Record<string, CachePeriod>
-}
-
-// ─── Persistent multi-month cache ─────────────────────────────────────────
-const CACHE_DIR = `${homedir()}/.config/opencode/plugins/model-usage`
-const CACHE_FILE = `${CACHE_DIR}/.usage-cache.json`
-
-let usageCache: UsageCache = { version: CACHE_VERSION, months: {} }
-
-let saveTimer: ReturnType<typeof setTimeout> | null = null
-const SAVE_DEBOUNCE_MS = 2000
-
-export function scheduleDiskSave() {
-  if (saveTimer !== null) return
-  saveTimer = setTimeout(() => {
-    saveTimer = null
-    saveDiskCache()
-  }, SAVE_DEBOUNCE_MS)
-}
-
-export function flushDiskSave() {
-  if (saveTimer !== null) {
-    clearTimeout(saveTimer)
-    saveTimer = null
-    saveDiskCache()
-  }
-}
-
-function ensureCacheDir() {
-  try { mkdirSync(CACHE_DIR, { recursive: true }) } catch { /* ignore */ }
-}
-
-export function migrateV2Cache(data: any): UsageCache {
-  const cloned = JSON.parse(JSON.stringify(data))
-  const months = cloned.months || {}
-  for (const key of Object.keys(months)) {
-    const month = months[key]
-    if (!month) continue
-
-    function normalizeModels(models: any[] | null | undefined) {
-      if (!models) return
-      for (const m of models) {
-        if (m.providerId !== undefined && m.providerID === undefined) {
-          m.providerID = m.providerId
-          delete m.providerId
-        }
-        if (m.modelId !== undefined && m.modelID === undefined) {
-          m.modelID = m.modelId
-          delete m.modelId
-        }
-      }
-    }
-
-    normalizeModels(month.models)
-    if (month.weeks) {
-      for (const w of month.weeks) {
-        normalizeModels(w.models)
-        if (w.days) {
-          for (const d of w.days) {
-            normalizeModels(d.models)
-          }
-        }
-      }
-    }
-    if (month.days) {
-      for (const d of month.days) {
-        normalizeModels(d.models)
-      }
-    }
-  }
-  return { version: CACHE_VERSION, months }
-}
-
-function loadDiskCache() {
-  ensureCacheDir()
-  try {
-    if (existsSync(CACHE_FILE)) {
-      const raw = readFileSync(CACHE_FILE, "utf-8")
-      const data = JSON.parse(raw)
-      if (data.version === CACHE_VERSION && data.months) {
-        usageCache = data as UsageCache
-      } else if (data.version === 2 && data.months) {
-        usageCache = migrateV2Cache(data)
-        saveDiskCache() // persist migration immediately
-      }
-      // else: unknown version — start fresh
-    }
-  } catch { /* ignore */ }
-}
-
-function saveDiskCache() {
-  ensureCacheDir()
-  try {
-    writeFileSync(CACHE_FILE, JSON.stringify(usageCache, null, 2))
-  } catch { /* ignore */ }
-}
-
-function getMonthCache(startMs: number): CachePeriod | undefined {
-  return usageCache.months[String(startMs)]
-}
-
-// Load on module init
-loadDiskCache()
-
-// ─── Helpers ────────────────────────────────────────────────────────────────
-
-export function computeUsageDataFromRows(rows: RawUsageRow[]): UsageData {
-  const modelMap = new Map<string, ModelUsage>()
-
-  for (const row of rows) {
-    if (!row.provider_id || !row.model_id) continue
-    const key = `${row.provider_id}/${row.model_id}`
-    let existing = modelMap.get(key)
-    if (!existing) {
-      existing = { providerID: row.provider_id, modelID: row.model_id, totalCost: 0, totalInput: 0, totalOutput: 0 }
-      modelMap.set(key, existing)
-    }
-    existing.totalCost += Math.max(0, row.cost ?? 0)
-    existing.totalInput += Math.max(0, row.input_tokens ?? 0)
-    existing.totalOutput += Math.max(0, row.output_tokens ?? 0)
-  }
-
-  const sorted = [...modelMap.values()]
-    .sort((a, b) => (b.totalInput + b.totalOutput) - (a.totalInput + a.totalOutput))
-    .slice(0, MAX_MODELS)
-
-  let totalInput = 0
-  let totalOutput = 0
-  let totalCost = 0
-  for (const m of sorted) {
-    totalInput += m.totalInput
-    totalOutput += m.totalOutput
-    totalCost += m.totalCost
-  }
-
-  return { models: sorted, totalInput, totalOutput, totalCost }
-}
-
-export function buildHierarchy(rows: RawUsageRow[], monthStartMs: number, monthEndMs: number): CachePeriod {
-  const dayMap = new Map<number, CachePeriod>()
-  const dayModels = new Map<number, Map<string, { providerID: string; modelID: string; totalCost: number; totalInput: number; totalOutput: number }>>()
-  const weekModels = new Map<number, Map<string, { providerID: string; modelID: string; totalCost: number; totalInput: number; totalOutput: number }>>()
-  for (const row of rows) {
-    const dayMs = Math.floor(row.time_created / MS_PER_DAY) * MS_PER_DAY
-    let day = dayMap.get(dayMs)
-    if (!day) {
-      day = {
-        startMs: dayMs,
-        endMs: dayMs + MS_PER_DAY,
-        inputTokens: 0,
-        outputTokens: 0,
-        totalCost: 0,
-        change: null,
-        lastUpdated: Date.now(),
-        weeks: null,
-        days: null,
-        models: null,
-      }
-      dayMap.set(dayMs, day)
-    }
-    day.inputTokens += row.input_tokens
-    day.outputTokens += row.output_tokens
-    day.totalCost += row.cost
-
-    if (row.provider_id && row.model_id) {
-      let dm = dayModels.get(dayMs)
-      if (!dm) {
-        dm = new Map()
-        dayModels.set(dayMs, dm)
-      }
-      const mk = `${row.provider_id}/${row.model_id}`
-      let me = dm.get(mk)
-      if (!me) {
-        me = { providerID: row.provider_id, modelID: row.model_id, totalCost: 0, totalInput: 0, totalOutput: 0 }
-        dm.set(mk, me)
-      }
-      me.totalCost += Math.max(0, row.cost ?? 0)
-      me.totalInput += Math.max(0, row.input_tokens ?? 0)
-      me.totalOutput += Math.max(0, row.output_tokens ?? 0)
-    }
-
-    if (row.provider_id && row.model_id) {
-      const wm = getWeekMonday(new Date(row.time_created)).getTime()
-      let wmap = weekModels.get(wm)
-      if (!wmap) { wmap = new Map(); weekModels.set(wm, wmap) }
-      const mk = `${row.provider_id}/${row.model_id}`
-      let me = wmap.get(mk)
-      if (!me) { me = { providerID: row.provider_id, modelID: row.model_id, totalCost: 0, totalInput: 0, totalOutput: 0 }; wmap.set(mk, me) }
-      me.totalCost += Math.max(0, row.cost ?? 0)
-      me.totalInput += Math.max(0, row.input_tokens ?? 0)
-      me.totalOutput += Math.max(0, row.output_tokens ?? 0)
-    }
-  }
-
-  const allDays: CachePeriod[] = []
-  for (let dayMs = monthStartMs; dayMs < monthEndMs; dayMs += MS_PER_DAY) {
-    const existing = dayMap.get(dayMs)
-    if (existing) {
-      allDays.push(existing)
-    } else {
-      allDays.push({
-        startMs: dayMs,
-        endMs: dayMs + MS_PER_DAY,
-        inputTokens: 0,
-        outputTokens: 0,
-        totalCost: 0,
-        change: null,
-        lastUpdated: Date.now(),
-        weeks: null,
-        days: null,
-        models: [],
-      })
-    }
-  }
-  const sortedDays = allDays
-
-  for (const day of sortedDays) {
-    const dm = dayModels.get(day.startMs)
-    if (dm) {
-      day.models = [...dm.values()]
-        .sort((a, b) => (b.totalInput + b.totalOutput) - (a.totalInput + a.totalOutput))
-        .slice(0, MAX_MODELS)
-    } else {
-      day.models = []
-    }
-  }
-
-  const weekMap = new Map<number, { weekMonday: number; days: CachePeriod[] }>()
-  for (const day of sortedDays) {
-    const wm = getWeekMonday(new Date(day.startMs)).getTime()
-    let w = weekMap.get(wm)
-    if (!w) {
-      w = { weekMonday: wm, days: [] }
-      weekMap.set(wm, w)
-    }
-    w.days.push(day)
-  }
-
-  const sortedWeekKeys = [...weekMap.keys()].sort((a, b) => a - b)
-  const weeks: CachePeriod[] = sortedWeekKeys.map((wk, i) => {
-    const w = weekMap.get(wk)!
-    const inputTokens = w.days.reduce((s, d) => s + d.inputTokens, 0)
-    const outputTokens = w.days.reduce((s, d) => s + d.outputTokens, 0)
-    const totalCost = w.days.reduce((s, d) => s + d.totalCost, 0)
-
-    let change: number | null = null
-    if (i > 0) {
-      const prev = weekMap.get(sortedWeekKeys[i - 1])!
-      const prevTotal = prev.days.reduce((s, d) => s + d.inputTokens + d.outputTokens, 0)
-      const currTotal = inputTokens + outputTokens
-      if (prevTotal > 0) {
-        change = Math.round(((currTotal - prevTotal) / prevTotal) * 100)
-      }
-    }
-
-    const wmap = weekModels.get(wk)
-    const weekModelArr = wmap ? [...wmap.values()]
-      .sort((a, b) => (b.totalInput + b.totalOutput) - (a.totalInput + a.totalOutput))
-      .slice(0, MAX_MODELS) : []
-
-    return {
-      startMs: wk,
-      endMs: wk + 7 * MS_PER_DAY,
-      inputTokens,
-      outputTokens,
-      totalCost,
-      change,
-      lastUpdated: Date.now(),
-      weeks: null,
-      days: w.days,
-      models: weekModelArr,
-    }
-  })
-
-  const totalInput = weeks.reduce((s, w) => s + w.inputTokens, 0)
-  const totalOutput = weeks.reduce((s, w) => s + w.outputTokens, 0)
-  const totalCostW = weeks.reduce((s, w) => s + w.totalCost, 0)
-
-  const monthModelMap = new Map<string, ModelUsage>()
-  for (const [, dm] of dayModels) {
-    for (const [key, model] of dm) {
-      const existing = monthModelMap.get(key)
-      if (!existing) {
-        monthModelMap.set(key, { ...model })
-      } else {
-        existing.totalCost += model.totalCost
-        existing.totalInput += model.totalInput
-        existing.totalOutput += model.totalOutput
-      }
-    }
-  }
-  const monthModels = [...monthModelMap.values()]
-    .sort((a, b) => (b.totalInput + b.totalOutput) - (a.totalInput + a.totalOutput))
-    .slice(0, MAX_MODELS)
-
-  return {
-    startMs: monthStartMs,
-    endMs: monthEndMs,
-    inputTokens: totalInput,
-    outputTokens: totalOutput,
-    totalCost: totalCostW,
-    change: null,
-    lastUpdated: Date.now(),
-    weeks,
-    days: sortedDays,
-    models: monthModels,
-  }
-}
-
-export function updateMonthCache(period: CachePeriod) {
-  const key = String(period.startMs)
-
-  const prevDate = new Date(period.startMs)
-  let prevMonth = prevDate.getUTCMonth() - 1
-  let prevYear = prevDate.getUTCFullYear()
-  if (prevMonth < 0) { prevMonth = 11; prevYear-- }
-  const prevMonthStartMs = Date.UTC(prevYear, prevMonth, 1)
-  const prevEntry = usageCache.months[String(prevMonthStartMs)]
-  if (prevEntry) {
-    const prevTotal = prevEntry.inputTokens + prevEntry.outputTokens
-    const currTotal = period.inputTokens + period.outputTokens
-    if (prevTotal > 0) {
-      period.change = Math.round(((currTotal - prevTotal) / prevTotal) * 100)
-    }
-  }
-
-  if (period.weeks && period.weeks.length > 0) {
-    const firstWeek = period.weeks[0]
-    if (firstWeek.change === null && prevEntry?.weeks?.length) {
-      const lastWeek = prevEntry.weeks[prevEntry.weeks.length - 1]
-      const lastWeekTotal = lastWeek.inputTokens + lastWeek.outputTokens
-      const firstWeekTotal = firstWeek.inputTokens + firstWeek.outputTokens
-      if (lastWeekTotal > 0) {
-        firstWeek.change = Math.round(((firstWeekTotal - lastWeekTotal) / lastWeekTotal) * 100)
-      }
-    }
-  }
-
-  usageCache.months[key] = period
-
-  let nextMonth = prevDate.getUTCMonth() + 1
-  let nextYear = prevDate.getUTCFullYear()
-  if (nextMonth > 11) { nextMonth = 0; nextYear++ }
-  const nextMonthStartMs = Date.UTC(nextYear, nextMonth, 1)
-  const nextEntry = usageCache.months[String(nextMonthStartMs)]
-  if (nextEntry) {
-    const currTotal = period.inputTokens + period.outputTokens
-    const nextTotal = nextEntry.inputTokens + nextEntry.outputTokens
-    if (currTotal > 0) {
-      nextEntry.change = Math.round(((nextTotal - currTotal) / currTotal) * 100)
-    }
-  }
-
-  scheduleDiskSave()
-}
-
-function getPrevMonthStartMs(ms: number): number {
-  const d = new Date(ms)
-  let m = d.getUTCMonth() - 1
-  let y = d.getUTCFullYear()
-  if (m < 0) { m = 11; y-- }
-  return Date.UTC(y, m, 1)
-}
+import { MS_PER_DAY, CACHE_TTL_MS, PREFETCH_DELAY_MS, type CachePeriod, getMonthCache, scheduleDiskSave, flushDiskSave, updateMonthCache } from "./cache"
+import { type Granularity, computeUsageDataFromRows, buildHierarchy, findPreviousPeriodTotal } from "./usage-domain"
 
 export function registerUsageCommand(api: TuiPluginApi) {
   api.keymap.registerLayer({
@@ -520,42 +136,8 @@ export function registerUsageCommand(api: TuiPluginApi) {
           }
 
           function computeAndSetDiff(startMs: number, currentTotal: number) {
-            const gran = granularity()
-            let previousTotal: number | null = null
-
-            if (gran === "month") {
-              const prevStartMs = getPrevMonthStartMs(startMs)
-              const prevCached = getMonthCache(prevStartMs)
-              if (prevCached) {
-                previousTotal = prevCached.inputTokens + prevCached.outputTokens
-              }
-              // Not cached → show —
-            } else {
-              const periodMs = gran === "week" ? 7 * MS_PER_DAY : MS_PER_DAY
-              const prevStartMs = startMs - periodMs
-
-              const currMonthStart = Date.UTC(new Date(startMs).getUTCFullYear(), new Date(startMs).getUTCMonth(), 1)
-              const currCached = getMonthCache(currMonthStart)
-              const periodField: "weeks" | "days" = gran === "week" ? "weeks" : "days"
-              const currList = currCached?.[periodField]
-              const prevPeriod = currList?.find((p: CachePeriod) => p.startMs === prevStartMs)
-              if (prevPeriod) {
-                previousTotal = prevPeriod.inputTokens + prevPeriod.outputTokens
-              }
-
-              if (previousTotal === null) {
-                const prevMonthStart = Date.UTC(new Date(prevStartMs).getUTCFullYear(), new Date(prevStartMs).getUTCMonth(), 1)
-                const prevCached = getMonthCache(prevMonthStart)
-                const prevList = prevCached?.[periodField]
-                const prevP = prevList?.find((p: CachePeriod) => p.startMs === prevStartMs)
-                if (prevP) {
-                  previousTotal = prevP.inputTokens + prevP.outputTokens
-                }
-              }
-              // Not cached → show —
-            }
-
-            setDiffInfo(formatPercentDiff(currentTotal, previousTotal))
+            const prev = findPreviousPeriodTotal(startMs, granularity(), getMonthCache)
+            setDiffInfo(formatPercentDiff(currentTotal, prev))
           }
 
           function loadData(forceRefresh: boolean = false) {
@@ -812,6 +394,8 @@ export function registerUsageCommand(api: TuiPluginApi) {
             if (key === "down") {
               return scroll.handleDown()
             }
+            if (key === "pageup")   { return scroll.handlePageUp() }
+            if (key === "pagedown") { return scroll.handlePageDown() }
             return false
           }
 
@@ -847,6 +431,8 @@ export function registerUsageCommand(api: TuiPluginApi) {
                   { key: "k",     cmd: "usage.scrollUp",   desc: "Scroll up" },
                   { key: "down",  cmd: "usage.scrollDown", desc: "Scroll down" },
                   { key: "j",     cmd: "usage.scrollDown", desc: "Scroll down" },
+                  { key: "pageup",   cmd: "usage.pageUp",   desc: "Page up" },
+                  { key: "pagedown", cmd: "usage.pageDown", desc: "Page down" },
                 ],
                 commands: [
                   { name: "usage.navLeft",     title: "Previous",       run: async () => { handleKey("left") } },
@@ -856,6 +442,8 @@ export function registerUsageCommand(api: TuiPluginApi) {
                   { name: "usage.toggleMode",  title: "Toggle Mode",    run: async () => { handleKey("m") } },
                   { name: "usage.scrollUp",    title: "Scroll Up",      run: async () => { handleKey("up") } },
                   { name: "usage.scrollDown",  title: "Scroll Down",    run: async () => { handleKey("down") } },
+                  { name: "usage.pageUp",   title: "Page Up",   run: async () => { handleKey("pageup") } },
+                  { name: "usage.pageDown", title: "Page Down", run: async () => { handleKey("pagedown") } },
                 ],
               })
               loadData()
@@ -947,10 +535,10 @@ export function registerUsageCommand(api: TuiPluginApi) {
                 {hasLoadedOnce() && (
                   <text fg={muted}>
                     {gran === "month"
-                      ? "t today  \u00b7  \u2190 \u2192 month  \u00b7  m mode  \u00b7  r reload  \u00b7  \u2191\u2193 scroll"
+                      ? "t today  \u00b7  \u2190 \u2192 month  \u00b7  m mode  \u00b7  r reload  \u00b7  PgUp/Dn \u2191\u2193 scroll"
                       : gran === "week"
-                        ? "t today  \u00b7  \u2190 \u2192 week  \u00b7  m mode  \u00b7  r reload  \u00b7  \u2191\u2193 scroll"
-                        : "t today  \u00b7  \u2190 \u2192 day  \u00b7  m mode  \u00b7  r reload  \u00b7  \u2191\u2193 scroll"}
+                        ? "t today  \u00b7  \u2190 \u2192 week  \u00b7  m mode  \u00b7  r reload  \u00b7  PgUp/Dn \u2191\u2193 scroll"
+                        : "t today  \u00b7  \u2190 \u2192 day  \u00b7  m mode  \u00b7  r reload  \u00b7  PgUp/Dn \u2191\u2193 scroll"}
                   </text>
                 )}
               </box>
