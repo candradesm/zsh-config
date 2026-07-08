@@ -524,8 +524,8 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
     <box flexDirection="column" gap={0}>
       {isSupported() ? (
         <>
-          <text fg={theme?.foreground ?? "#ffffff"}><strong>{providerLabel()}</strong></text>
-          <text fg={theme?.muted ?? "#888888"}>Cost estimation</text>
+          <text fg={theme?.text ?? "#ffffff"}><strong>{providerLabel()}</strong></text>
+          <text fg={theme?.textMuted ?? "#888888"}>Cost estimation</text>
           <text fg="#ffffff">{("↑ " + peakInputTokens().toLocaleString() + " tokens").padEnd(26) + "$" + totalInputCost().toFixed(2)}</text>
           <text fg="#ffffff">{("↓ " + totalOutputTokens().toLocaleString() + " tokens").padEnd(26) + "$" + totalOutputCost().toFixed(2)}</text>
           {cacheHitRate() !== null ? (
@@ -533,12 +533,12 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
               {cacheHitRate() + "% cache hit"}
             </text>
           ) : null}
-          <text fg={theme?.foreground ?? "#ffffff"}>
+          <text fg={theme?.text ?? "#ffffff"}>
             {"Total".padEnd(26) + "$" + (totalInputCost() + totalOutputCost()).toFixed(2)}
           </text>
           {isCopilotActive() ? (
             <>
-              <text fg={theme?.muted ?? "#888888"}>Monthly quota</text>
+              <text fg={theme?.textMuted ?? "#888888"}>Monthly quota</text>
               {!hasToken ? (
                 <text fg="#eab308">No token provided (set GITHUB_TOKEN)</text>
               ) : quotaInfo()?.unlimited ? (
@@ -559,7 +559,7 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
             </>
           ) : isOpenCodeGoActive() ? (
             <>
-              <text fg={theme?.muted ?? "#888888"}>Quota</text>
+              <text fg={theme?.textMuted ?? "#888888"}>Quota</text>
               {!goQuota() && goQuotaLoading() ? (
                 <text fg="#888888">Loading...</text>
               ) : goQuota() ? (
@@ -569,25 +569,25 @@ function UsageSidebar(props: { api: TuiPluginApi; session_id: string }) {
                 (goQuota()!.monthly?.usagePercent ?? 0) === 0 ? (
                   <box flexDirection="column" gap={0}>
                     <text fg="#eab308">⚠ Unable to fetch Go quota</text>
-                    <text fg={theme?.muted ?? "#888888"}>Set OPENCODE_GO_AUTH_COOKIE with your browser's auth cookie</text>
+                    <text fg={theme?.textMuted ?? "#888888"}>Set OPENCODE_GO_AUTH_COOKIE with your browser's auth cookie</text>
                   </box>
                 ) : (
                   <box flexDirection="column" gap={0}>
-                    <text fg={theme?.muted ?? "#888888"}>Rolling (5h)</text>
+                    <text fg={theme?.textMuted ?? "#888888"}>Rolling (5h)</text>
                     <text fg={getUsageColor(goQuota()!.rolling?.usagePercent ?? 0)}>
                       {goQuota()!.rolling?.usagePercent ?? 0}% · resets in {formatDuration(goQuota()!.rolling?.resetInSec ?? 0)}
                     </text>
                     <text fg={getUsageColor(goQuota()!.rolling?.usagePercent ?? 0)}>
                       {buildProgressBar(goQuota()!.rolling?.usagePercent ?? 0)}
                     </text>
-                    <text fg={theme?.muted ?? "#888888"}>Weekly</text>
+                    <text fg={theme?.textMuted ?? "#888888"}>Weekly</text>
                     <text fg={getUsageColor(goQuota()!.weekly?.usagePercent ?? 0)}>
                       {goQuota()!.weekly?.usagePercent ?? 0}% · resets in {formatDuration(goQuota()!.weekly?.resetInSec ?? 0)}
                     </text>
                     <text fg={getUsageColor(goQuota()!.weekly?.usagePercent ?? 0)}>
                       {buildProgressBar(goQuota()!.weekly?.usagePercent ?? 0)}
                     </text>
-                    <text fg={theme?.muted ?? "#888888"}>Monthly</text>
+                    <text fg={theme?.textMuted ?? "#888888"}>Monthly</text>
                     <text fg={getUsageColor(goQuota()!.monthly?.usagePercent ?? 0)}>
                       {goQuota()!.monthly?.usagePercent ?? 0}% · resets in {formatDuration(goQuota()!.monthly?.resetInSec ?? 0)}
                     </text>

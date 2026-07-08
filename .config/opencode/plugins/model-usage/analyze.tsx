@@ -85,9 +85,9 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
 
           // ── Derived values ───────────────────────────────────────────────
           const theme = api.theme.current
-          const fg = theme?.foreground ?? "#ffffff"
-          const muted = theme?.muted ?? "#888888"
-          const red = theme?.red ?? "#ef4444"
+          const fg = theme?.text ?? "#ffffff"
+          const muted = theme?.textMuted ?? "#888888"
+          const red = theme?.error ?? "#ef4444"
           const primary = (theme as ThemeColors)?.primary
           const selectedText = (theme as ThemeColors)?.selectedListItemText
           const BAR_WIDTH = 50
