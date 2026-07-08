@@ -10,12 +10,18 @@ export interface RawUsageRow {
   output_tokens: number
 }
 
-const MAX_MODELS = 10
+export const MAX_MODELS = 10
 
-export function queryUsage(dbPath: string, startMs: number, endMs: number): UsageData | { error: string } {
+export function queryUsage(dbOrPath: Database | string, startMs: number, endMs: number): UsageData | { error: string } {
   let db: Database | null = null
+  let ownConnection = false
   try {
-    db = new Database(dbPath, { readonly: true })
+    if (typeof dbOrPath === "string") {
+      db = new Database(dbOrPath, { readonly: true })
+      ownConnection = true
+    } else {
+      db = dbOrPath
+    }
 
     const rows = db
       .query(
@@ -34,9 +40,6 @@ export function queryUsage(dbPath: string, startMs: number, endMs: number): Usag
          LIMIT ${MAX_MODELS}`,
       )
       .all(startMs, endMs) as UsageRow[]
-
-    db.close()
-    db = null
 
     let totalInput = 0
     let totalOutput = 0
@@ -64,18 +67,26 @@ export function queryUsage(dbPath: string, startMs: number, endMs: number): Usag
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) }
   } finally {
-    try {
-      db?.close()
-    } catch {
-      /* already closed */
+    if (ownConnection) {
+      try {
+        db?.close()
+      } catch {
+        /* already closed */
+      }
     }
   }
 }
 
-export function fetchRawRows(dbPath: string, startMs: number, endMs: number): RawUsageRow[] | { error: string } {
+export function fetchRawRows(dbOrPath: Database | string, startMs: number, endMs: number): RawUsageRow[] | { error: string } {
   let db: Database | null = null
+  let ownConnection = false
   try {
-    db = new Database(dbPath, { readonly: true })
+    if (typeof dbOrPath === "string") {
+      db = new Database(dbOrPath, { readonly: true })
+      ownConnection = true
+    } else {
+      db = dbOrPath
+    }
 
     const rows = db
       .query(
@@ -94,9 +105,6 @@ export function fetchRawRows(dbPath: string, startMs: number, endMs: number): Ra
       )
       .all(startMs, endMs) as RawUsageRow[]
 
-    db.close()
-    db = null
-
     return (rows ?? []).map((r: RawUsageRow) => ({
       time_created: r.time_created,
       model_id: r.model_id ?? null,
@@ -108,14 +116,22 @@ export function fetchRawRows(dbPath: string, startMs: number, endMs: number): Ra
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) }
   } finally {
-    try { db?.close() } catch { /* ignore */ }
+    if (ownConnection) {
+      try { db?.close() } catch { /* ignore */ }
+    }
   }
 }
 
-export function getEarliestUsageDate(dbPath: string): number | null {
+export function getEarliestUsageDate(dbOrPath: Database | string): number | null {
   let db: Database | null = null
+  let ownConnection = false
   try {
-    db = new Database(dbPath, { readonly: true })
+    if (typeof dbOrPath === "string") {
+      db = new Database(dbOrPath, { readonly: true })
+      ownConnection = true
+    } else {
+      db = dbOrPath
+    }
     const row = db
       .query(
         `SELECT MIN(time_created) AS earliest
@@ -123,13 +139,13 @@ export function getEarliestUsageDate(dbPath: string): number | null {
          WHERE json_extract(data, '$.role') = 'assistant'`
       )
       .get() as { earliest: number | null } | undefined
-    db.close()
-    db = null
     return row?.earliest ?? null
   } catch {
     return null
   } finally {
-    try { db?.close() } catch { /* ignore */ }
+    if (ownConnection) {
+      try { db?.close() } catch { /* ignore */ }
+    }
   }
 }
 
@@ -142,10 +158,16 @@ export function getEarliestUsageDate(dbPath: string): number | null {
  *
  * The caller is responsible for tokenising the returned text (char/4).
  */
-export function loadBaseline(dbPath: string, sessionID: string): string | null {
+export function loadBaseline(dbOrPath: Database | string, sessionID: string): string | null {
   let db: Database | null = null
+  let ownConnection = false
   try {
-    db = new Database(dbPath, { readonly: true })
+    if (typeof dbOrPath === "string") {
+      db = new Database(dbOrPath, { readonly: true })
+      ownConnection = true
+    } else {
+      db = dbOrPath
+    }
     // Guard against older OpenCode builds that lack the table.
     const table = db
       .query(`SELECT name FROM sqlite_master WHERE type='table' AND name='session_context_epoch'`)
@@ -154,13 +176,13 @@ export function loadBaseline(dbPath: string, sessionID: string): string | null {
     const row = db
       .query(`SELECT baseline FROM session_context_epoch WHERE session_id = ?`)
       .get(sessionID) as { baseline: string } | undefined
-    db.close()
-    db = null
     if (!row || typeof row.baseline !== "string" || row.baseline.length === 0) return null
     return row.baseline
   } catch {
     return null
   } finally {
-    try { db?.close() } catch { /* ignore */ }
+    if (ownConnection) {
+      try { db?.close() } catch { /* ignore */ }
+    }
   }
 }

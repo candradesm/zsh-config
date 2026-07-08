@@ -2,22 +2,25 @@
 import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs"
 import { homedir } from "node:os"
+import { Database } from "bun:sqlite"
 
 import { onMount, onCleanup, createSignal } from "solid-js"
 import { getMonthInfo, isCurrentMonth, getWeekMonday, getWeekInfo } from "./helpers/dates"
 import { fmt, fmtCost, buildBar, formatPercentDiff } from "./helpers/format"
 import type { UsageData, ModelUsage } from "./types"
-import { getEarliestUsageDate, fetchRawRows, type RawUsageRow } from "./db"
+import { getEarliestUsageDate, fetchRawRows, queryUsage, MAX_MODELS, type RawUsageRow } from "./db"
 import { makeScrollState } from "./shared/scroll"
 import { registerDialogKeyLayer } from "./shared/keys"
 
-const MS_PER_DAY = 86_400_000
+export const MS_PER_DAY = 86_400_000
 const CACHE_TTL_MS = 60_000
+const PREFETCH_DELAY_MS = 100
+export const CACHE_VERSION = 3
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 type Granularity = "month" | "week" | "day"
 
-interface CachePeriod {
+export interface CachePeriod {
   startMs: number
   endMs: number
   inputTokens: number
@@ -30,7 +33,7 @@ interface CachePeriod {
   models: ModelUsage[] | null
 }
 
-interface UsageCache {
+export interface UsageCache {
   version: number
   months: Record<string, CachePeriod>
 }
@@ -39,10 +42,70 @@ interface UsageCache {
 const CACHE_DIR = `${homedir()}/.config/opencode/plugins/model-usage`
 const CACHE_FILE = `${CACHE_DIR}/.usage-cache.json`
 
-let usageCache: UsageCache = { version: 2, months: {} }
+let usageCache: UsageCache = { version: CACHE_VERSION, months: {} }
+
+let saveTimer: ReturnType<typeof setTimeout> | null = null
+const SAVE_DEBOUNCE_MS = 2000
+
+export function scheduleDiskSave() {
+  if (saveTimer !== null) return
+  saveTimer = setTimeout(() => {
+    saveTimer = null
+    saveDiskCache()
+  }, SAVE_DEBOUNCE_MS)
+}
+
+export function flushDiskSave() {
+  if (saveTimer !== null) {
+    clearTimeout(saveTimer)
+    saveTimer = null
+    saveDiskCache()
+  }
+}
 
 function ensureCacheDir() {
   try { mkdirSync(CACHE_DIR, { recursive: true }) } catch { /* ignore */ }
+}
+
+export function migrateV2Cache(data: any): UsageCache {
+  const cloned = JSON.parse(JSON.stringify(data))
+  const months = cloned.months || {}
+  for (const key of Object.keys(months)) {
+    const month = months[key]
+    if (!month) continue
+
+    function normalizeModels(models: any[] | null | undefined) {
+      if (!models) return
+      for (const m of models) {
+        if (m.providerId !== undefined && m.providerID === undefined) {
+          m.providerID = m.providerId
+          delete m.providerId
+        }
+        if (m.modelId !== undefined && m.modelID === undefined) {
+          m.modelID = m.modelId
+          delete m.modelId
+        }
+      }
+    }
+
+    normalizeModels(month.models)
+    if (month.weeks) {
+      for (const w of month.weeks) {
+        normalizeModels(w.models)
+        if (w.days) {
+          for (const d of w.days) {
+            normalizeModels(d.models)
+          }
+        }
+      }
+    }
+    if (month.days) {
+      for (const d of month.days) {
+        normalizeModels(d.models)
+      }
+    }
+  }
+  return { version: CACHE_VERSION, months }
 }
 
 function loadDiskCache() {
@@ -51,10 +114,13 @@ function loadDiskCache() {
     if (existsSync(CACHE_FILE)) {
       const raw = readFileSync(CACHE_FILE, "utf-8")
       const data = JSON.parse(raw)
-      if (data.version === 2 && data.months) {
+      if (data.version === CACHE_VERSION && data.months) {
         usageCache = data as UsageCache
+      } else if (data.version === 2 && data.months) {
+        usageCache = migrateV2Cache(data)
+        saveDiskCache() // persist migration immediately
       }
-      // else: old format (version 1 or missing) — start fresh
+      // else: unknown version — start fresh
     }
   } catch { /* ignore */ }
 }
@@ -75,7 +141,7 @@ loadDiskCache()
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-function computeUsageDataFromRows(rows: RawUsageRow[]): UsageData {
+export function computeUsageDataFromRows(rows: RawUsageRow[]): UsageData {
   const modelMap = new Map<string, ModelUsage>()
 
   for (const row of rows) {
@@ -93,7 +159,7 @@ function computeUsageDataFromRows(rows: RawUsageRow[]): UsageData {
 
   const sorted = [...modelMap.values()]
     .sort((a, b) => (b.totalInput + b.totalOutput) - (a.totalInput + a.totalOutput))
-    .slice(0, 10)
+    .slice(0, MAX_MODELS)
 
   let totalInput = 0
   let totalOutput = 0
@@ -107,7 +173,7 @@ function computeUsageDataFromRows(rows: RawUsageRow[]): UsageData {
   return { models: sorted, totalInput, totalOutput, totalCost }
 }
 
-function buildHierarchy(rows: RawUsageRow[], monthStartMs: number, monthEndMs: number): CachePeriod {
+export function buildHierarchy(rows: RawUsageRow[], monthStartMs: number, monthEndMs: number): CachePeriod {
   const dayMap = new Map<number, CachePeriod>()
   const dayModels = new Map<number, Map<string, { providerID: string; modelID: string; totalCost: number; totalInput: number; totalOutput: number }>>()
   const weekModels = new Map<number, Map<string, { providerID: string; modelID: string; totalCost: number; totalInput: number; totalOutput: number }>>()
@@ -190,7 +256,7 @@ function buildHierarchy(rows: RawUsageRow[], monthStartMs: number, monthEndMs: n
     if (dm) {
       day.models = [...dm.values()]
         .sort((a, b) => (b.totalInput + b.totalOutput) - (a.totalInput + a.totalOutput))
-        .slice(0, 10)
+        .slice(0, MAX_MODELS)
     } else {
       day.models = []
     }
@@ -227,7 +293,7 @@ function buildHierarchy(rows: RawUsageRow[], monthStartMs: number, monthEndMs: n
     const wmap = weekModels.get(wk)
     const weekModelArr = wmap ? [...wmap.values()]
       .sort((a, b) => (b.totalInput + b.totalOutput) - (a.totalInput + a.totalOutput))
-      .slice(0, 10) : []
+      .slice(0, MAX_MODELS) : []
 
     return {
       startMs: wk,
@@ -247,7 +313,22 @@ function buildHierarchy(rows: RawUsageRow[], monthStartMs: number, monthEndMs: n
   const totalOutput = weeks.reduce((s, w) => s + w.outputTokens, 0)
   const totalCostW = weeks.reduce((s, w) => s + w.totalCost, 0)
 
-  const monthModels = computeUsageDataFromRows(rows).models
+  const monthModelMap = new Map<string, ModelUsage>()
+  for (const [, dm] of dayModels) {
+    for (const [key, model] of dm) {
+      const existing = monthModelMap.get(key)
+      if (!existing) {
+        monthModelMap.set(key, { ...model })
+      } else {
+        existing.totalCost += model.totalCost
+        existing.totalInput += model.totalInput
+        existing.totalOutput += model.totalOutput
+      }
+    }
+  }
+  const monthModels = [...monthModelMap.values()]
+    .sort((a, b) => (b.totalInput + b.totalOutput) - (a.totalInput + a.totalOutput))
+    .slice(0, MAX_MODELS)
 
   return {
     startMs: monthStartMs,
@@ -263,7 +344,7 @@ function buildHierarchy(rows: RawUsageRow[], monthStartMs: number, monthEndMs: n
   }
 }
 
-function updateMonthCache(period: CachePeriod) {
+export function updateMonthCache(period: CachePeriod) {
   const key = String(period.startMs)
 
   const prevDate = new Date(period.startMs)
@@ -307,7 +388,7 @@ function updateMonthCache(period: CachePeriod) {
     }
   }
 
-  saveDiskCache()
+  scheduleDiskSave()
 }
 
 function getPrevMonthStartMs(ms: number): number {
@@ -332,9 +413,9 @@ export function registerUsageCommand(api: TuiPluginApi) {
           const dbPath = `${homedir()}/.local/share/opencode/opencode.db`
           const now = new Date()
 
-          const fg = theme?.foreground ?? "#ffffff"
-          const muted = theme?.muted ?? "#888888"
-          const red = theme?.red ?? "#ef4444"
+          const fg = theme?.text ?? "#ffffff"
+          const muted = theme?.textMuted ?? "#888888"
+          const red = theme?.error ?? "#ef4444"
 
           if (!existsSync(dbPath)) {
             api.ui.dialog.replace(() => {
@@ -350,11 +431,29 @@ export function registerUsageCommand(api: TuiPluginApi) {
             return
           }
 
+          let db: Database | null = null
+          let cleanedUp = false
+          try {
+            db = new Database(dbPath, { readonly: true })
+          } catch (err) {
+            api.ui.dialog.replace(() => {
+              onMount(() => { api.ui.dialog.setSize("medium") })
+              return (
+                <box padding={2} flexDirection="column" gap={1}>
+                  <text fg={red}><b>Usage Data Unavailable</b></text>
+                  <text fg={muted}>Could not open database.</text>
+                  <text fg={muted}>{err instanceof Error ? err.message : String(err)}</text>
+                </box>
+              )
+            })
+            return
+          }
+
           let minMonthOffset = 0
           let minWeekOffset = 0
           let minDayOffset = 0
           {
-            const earliestMs = getEarliestUsageDate(dbPath)
+            const earliestMs = getEarliestUsageDate(db)
             if (earliestMs != null) {
               const earliestDate = new Date(earliestMs)
               const earliestYear = earliestDate.getUTCFullYear()
@@ -429,16 +528,11 @@ export function registerUsageCommand(api: TuiPluginApi) {
               const prevCached = getMonthCache(prevStartMs)
               if (prevCached) {
                 previousTotal = prevCached.inputTokens + prevCached.outputTokens
-              } else {
-                const prevRows = fetchRawRows(dbPath, prevStartMs, startMs)
-                if (!("error" in prevRows)) {
-                  previousTotal = prevRows.reduce((s, r) => s + r.input_tokens + r.output_tokens, 0)
-                }
               }
+              // Not cached → show —
             } else {
               const periodMs = gran === "week" ? 7 * MS_PER_DAY : MS_PER_DAY
               const prevStartMs = startMs - periodMs
-              const prevEndMs = startMs
 
               const currMonthStart = Date.UTC(new Date(startMs).getUTCFullYear(), new Date(startMs).getUTCMonth(), 1)
               const currCached = getMonthCache(currMonthStart)
@@ -458,13 +552,7 @@ export function registerUsageCommand(api: TuiPluginApi) {
                   previousTotal = prevP.inputTokens + prevP.outputTokens
                 }
               }
-
-              if (previousTotal === null) {
-                const prevRows = fetchRawRows(dbPath, prevStartMs, prevEndMs)
-                if (!("error" in prevRows)) {
-                  previousTotal = prevRows.reduce((s, r) => s + r.input_tokens + r.output_tokens, 0)
-                }
-              }
+              // Not cached → show —
             }
 
             setDiffInfo(formatPercentDiff(currentTotal, previousTotal))
@@ -486,147 +574,135 @@ export function registerUsageCommand(api: TuiPluginApi) {
               }
             }
 
-            if (gran === "month") {
-              if (!forceRefresh) {
-                const fileCached = getMonthCache(startMs)
-                if (fileCached) {
-                  const models = fileCached.models ?? []
-                  const isCurrent = isCurrentMonth(startMs)
-                  const isStale = isCurrent && (Date.now() - fileCached.lastUpdated) >= CACHE_TTL_MS
-                  if (!isStale) {
-                    const data: UsageData = {
-                      models,
-                      totalInput: fileCached.inputTokens,
-                      totalOutput: fileCached.outputTokens,
-                      totalCost: fileCached.totalCost,
-                    }
-                    setViewState(data)
-                    modelCache.set(cacheKey, data)
-
-                    const currentTotal = fileCached.inputTokens + fileCached.outputTokens
-                    computeAndSetDiff(startMs, currentTotal)
-
-                    if (!hasLoadedOnce()) setHasLoadedOnce(true)
-                    return
+            if (!forceRefresh && gran === "month") {
+              const fileCached = getMonthCache(startMs)
+              if (fileCached) {
+                const models = fileCached.models ?? []
+                const isCurrent = isCurrentMonth(startMs)
+                const isStale = isCurrent && (Date.now() - fileCached.lastUpdated) >= CACHE_TTL_MS
+                if (!isStale) {
+                  const data: UsageData = {
+                    models,
+                    totalInput: fileCached.inputTokens,
+                    totalOutput: fileCached.outputTokens,
+                    totalCost: fileCached.totalCost,
                   }
+                  setViewState(data)
+                  modelCache.set(cacheKey, data)
+
+                  const currentTotal = fileCached.inputTokens + fileCached.outputTokens
+                  computeAndSetDiff(startMs, currentTotal)
+
+                  if (!hasLoadedOnce()) setHasLoadedOnce(true)
+                  return
                 }
               }
-            } else if (gran === "week" || gran === "day") {
-              if (!forceRefresh) {
-                const monthStart = Date.UTC(new Date(startMs).getUTCFullYear(), new Date(startMs).getUTCMonth(), 1)
-                const monthCached = getMonthCache(monthStart)
-                const periodList = gran === "week" ? monthCached?.weeks : monthCached?.days
-                const period = periodList?.find(p => p.startMs === startMs)
-                if (period) {
-                  const models = period.models ?? []
-                  const isCurrent = gran === "week" ? weekOffset() === 0 : dayOffset() === 0
-                  const isStale = isCurrent && (Date.now() - period.lastUpdated) >= CACHE_TTL_MS
-                  if (!isStale) {
-                    const data: UsageData = {
-                      models,
-                      totalInput: period.inputTokens,
-                      totalOutput: period.outputTokens,
-                      totalCost: period.totalCost,
-                    }
-                    setViewState(data)
-                    modelCache.set(cacheKey, data)
-
-                    const currentTotal = period.inputTokens + period.outputTokens
-                    computeAndSetDiff(startMs, currentTotal)
-
-                    setTimeout(() => {
-                      const periodMs = gran === "week" ? 7 * MS_PER_DAY : MS_PER_DAY
-                      for (const adjStart of [startMs - periodMs, startMs + periodMs]) {
-                        const adjKey = modelCacheKey(gran, adjStart)
-                        if (modelCache.has(adjKey)) continue
-                        let adjPeriod: CachePeriod | undefined
-                        adjPeriod = periodList?.find(p => p.startMs === adjStart)
-                        if (!adjPeriod) {
-                          const adjMonthStart = Date.UTC(new Date(adjStart).getUTCFullYear(), new Date(adjStart).getUTCMonth(), 1)
-                          const adjCached = getMonthCache(adjMonthStart)
-                          const adjList2 = gran === "week" ? adjCached?.weeks : adjCached?.days
-                          adjPeriod = adjList2?.find(p => p.startMs === adjStart)
-                        }
-                        if (adjPeriod) {
-                          modelCache.set(adjKey, {
-                            models: adjPeriod.models,
-                            totalInput: adjPeriod.inputTokens,
-                            totalOutput: adjPeriod.outputTokens,
-                            totalCost: adjPeriod.totalCost,
-                          })
-                        }
-                      }
-                    }, 10)
-
-                    if (!hasLoadedOnce()) setHasLoadedOnce(true)
-                    return
+            } else if (!forceRefresh && (gran === "week" || gran === "day")) {
+              const monthStart = Date.UTC(new Date(startMs).getUTCFullYear(), new Date(startMs).getUTCMonth(), 1)
+              const monthCached = getMonthCache(monthStart)
+              const periodList = gran === "week" ? monthCached?.weeks : monthCached?.days
+              const period = periodList?.find(p => p.startMs === startMs)
+              if (period) {
+                const models = period.models ?? []
+                const isCurrent = gran === "week" ? weekOffset() === 0 : dayOffset() === 0
+                const isStale = isCurrent && (Date.now() - period.lastUpdated) >= CACHE_TTL_MS
+                if (!isStale) {
+                  const data: UsageData = {
+                    models,
+                    totalInput: period.inputTokens,
+                    totalOutput: period.outputTokens,
+                    totalCost: period.totalCost,
                   }
+                  setViewState(data)
+                  modelCache.set(cacheKey, data)
+
+                  const currentTotal = period.inputTokens + period.outputTokens
+                  computeAndSetDiff(startMs, currentTotal)
+
+                  // Prefill adjacent model cache from hierarchy (sync, no DB)
+                  const periodMs = gran === "week" ? 7 * MS_PER_DAY : MS_PER_DAY
+                  const nextStart = startMs + periodMs
+                  const nextKey = modelCacheKey(gran, nextStart)
+                  if (!modelCache.has(nextKey)) {
+                    let adjPeriod: CachePeriod | undefined
+                    adjPeriod = periodList?.find(p => p.startMs === nextStart)
+                    if (!adjPeriod) {
+                      const adjMonthStart = Date.UTC(new Date(nextStart).getUTCFullYear(), new Date(nextStart).getUTCMonth(), 1)
+                      const adjCached = getMonthCache(adjMonthStart)
+                      const adjList2 = gran === "week" ? adjCached?.weeks : adjCached?.days
+                      adjPeriod = adjList2?.find(p => p.startMs === nextStart)
+                    }
+                    if (adjPeriod) {
+                      modelCache.set(nextKey, {
+                        models: adjPeriod.models,
+                        totalInput: adjPeriod.inputTokens,
+                        totalOutput: adjPeriod.outputTokens,
+                        totalCost: adjPeriod.totalCost,
+                      })
+                    }
+                  }
+
+                  if (!hasLoadedOnce()) setHasLoadedOnce(true)
+                  return
                 }
               }
             }
 
-            setTimeout(() => {
-              const rowsResult = fetchRawRows(dbPath, startMs, endMs)
-              if ("error" in rowsResult) {
-                setErrorMsg(rowsResult.error)
-                setViewState("error")
-                if (!hasLoadedOnce()) setHasLoadedOnce(true)
-                return
-              }
+            // ── Fallback: cache miss ──────────────────────────────────
+            // Step 1: Fast SQL GROUP BY for display
+            if (!db) return
+            const usageResult = queryUsage(db, startMs, endMs)
+            if ("error" in usageResult) {
+              setErrorMsg(usageResult.error)
+              setViewState("error")
+              if (!hasLoadedOnce()) setHasLoadedOnce(true)
+              return
+            }
+            const usageData = usageResult
+            modelCache.set(modelCacheKey(granularity(), startMs), usageData)
+            setViewState(usageData)
+            computeAndSetDiff(startMs, usageData.totalInput + usageData.totalOutput)
+            if (!hasLoadedOnce()) setHasLoadedOnce(true)
 
-              const rows = rowsResult
-
-              const usageData = computeUsageDataFromRows(rows)
-              modelCache.set(modelCacheKey(granularity(), startMs), usageData)
-              setViewState(usageData)
-
-              if (granularity() === "month") {
-                const monthStartMs = startMs
-                const monthEndMs = endMs
-                const period = buildHierarchy(rows, monthStartMs, monthEndMs)
-                updateMonthCache(period)
-              }
-
-              computeAndSetDiff(startMs, usageData.totalInput + usageData.totalOutput)
-
+            // Step 2: Background hierarchy building (async, non-blocking)
+            if (gran === "month") {
               setTimeout(() => {
-                if (gran === "month") {
-                  for (const adjStartMs of [getPrevMonthStartMs(startMs), startMs + 32 * MS_PER_DAY]) {
-                    const d = new Date(adjStartMs)
-                    const adjNorm = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)
-                    const adjKey = modelCacheKey("month", adjNorm)
-                    if (modelCache.has(adjKey)) continue
-                    const adjEndMs = Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1)
-                    const adjRows = fetchRawRows(dbPath, adjNorm, adjEndMs)
-                    if ("error" in adjRows || adjRows.length === 0) continue
-                    modelCache.set(adjKey, computeUsageDataFromRows(adjRows))
-                  }
-                } else {
-                  const periodMs = gran === "week" ? 7 * MS_PER_DAY : MS_PER_DAY
-                  for (const adjStart of [startMs - periodMs, startMs + periodMs]) {
-                    const adjKey = modelCacheKey(gran, adjStart)
-                    if (modelCache.has(adjKey)) continue
-                    const adjRows = fetchRawRows(dbPath, adjStart, adjStart + periodMs)
-                    if ("error" in adjRows || adjRows.length === 0) continue
-                    const adjData = computeUsageDataFromRows(adjRows)
-                    modelCache.set(adjKey, adjData)
-                    const adjMonthStart = Date.UTC(new Date(adjStart).getUTCFullYear(), new Date(adjStart).getUTCMonth(), 1)
-                    const adjMonth = getMonthCache(adjMonthStart)
-                    if (adjMonth) {
-                      const periodList = gran === "week" ? adjMonth.weeks : adjMonth.days
-                      const period = periodList?.find(p => p.startMs === adjStart)
-                      if (period) {
-                        period.models = adjData.models
-                        period.lastUpdated = Date.now()
-                        saveDiskCache()
-                      }
-                    }
+                if (cleanedUp || !db) return
+                const rowsResult = fetchRawRows(db, startMs, endMs)
+                if (!("error" in rowsResult)) {
+                  const period = buildHierarchy(rowsResult, startMs, endMs)
+                  updateMonthCache(period)
+                }
+              }, 0)
+            }
+
+            // Step 3: Prefetch forward (async)
+            setTimeout(() => {
+              if (cleanedUp || !db) return
+              const nextGran = granularity()
+              if (nextGran === "month") {
+                const d = new Date(startMs)
+                const nextStart = Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1)
+                const nextKey = modelCacheKey("month", nextStart)
+                if (!modelCache.has(nextKey)) {
+                  const nextEnd = Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 2, 1)
+                  const adjResult = queryUsage(db, nextStart, nextEnd)
+                  if (!("error" in adjResult)) {
+                    modelCache.set(nextKey, adjResult)
                   }
                 }
-              }, 50)
-
-              if (!hasLoadedOnce()) setHasLoadedOnce(true)
-            }, 0)
+              } else {
+                const periodMs = nextGran === "week" ? 7 * MS_PER_DAY : MS_PER_DAY
+                const nextStart = startMs + periodMs
+                const nextKey = modelCacheKey(nextGran, nextStart)
+                if (!modelCache.has(nextKey)) {
+                  const adjResult = queryUsage(db, nextStart, nextStart + periodMs)
+                  if (!("error" in adjResult)) {
+                    modelCache.set(nextKey, adjResult)
+                  }
+                }
+              }
+            }, PREFETCH_DELAY_MS)
           }
 
           let cleanupKeyLayer: (() => void) | null = null
@@ -644,7 +720,7 @@ export function registerUsageCommand(api: TuiPluginApi) {
                 setDayOffset(p => p - 1)
               }
               scroll.scrollToTop()
-              setTimeout(loadData, 0)
+              loadData()
               return true
             }
             if (key === "right" || key === "l") {
@@ -659,7 +735,7 @@ export function registerUsageCommand(api: TuiPluginApi) {
                 setDayOffset(p => p + 1)
               }
               scroll.scrollToTop()
-              setTimeout(loadData, 0)
+              loadData()
               return true
             }
             if (key === "r") {
@@ -688,7 +764,7 @@ export function registerUsageCommand(api: TuiPluginApi) {
                 setDayOffset(0)
               }
               scroll.scrollToTop()
-              setTimeout(loadData, 0)
+              loadData()
               return true
             }
             if (key === "m") {
@@ -727,7 +803,7 @@ export function registerUsageCommand(api: TuiPluginApi) {
                 }
               }
               scroll.scrollToTop()
-              setTimeout(loadData, 0)
+              loadData()
               return true
             }
             if (key === "up") {
@@ -749,11 +825,11 @@ export function registerUsageCommand(api: TuiPluginApi) {
             if (minOffset === 0) {
               arrows = ""
             } else if (offset >= 0) {
-              arrows = " ←"
+              arrows = " \u2190"
             } else if (offset <= minOffset) {
-              arrows = " →"
+              arrows = " \u2192"
             } else {
-              arrows = " ← →"
+              arrows = " \u2190 \u2192"
             }
 
             onMount(() => {
@@ -785,9 +861,15 @@ export function registerUsageCommand(api: TuiPluginApi) {
               loadData()
             })
             onCleanup(() => {
+              cleanedUp = true
               if (cleanupKeyLayer) {
                 try { cleanupKeyLayer() } catch { /* ignore */ }
                 cleanupKeyLayer = null
+              }
+              flushDiskSave()
+              if (db) {
+                try { db.close() } catch { /* ignore */ }
+                db = null
               }
             })
 
@@ -804,12 +886,12 @@ export function registerUsageCommand(api: TuiPluginApi) {
                   const data = viewState()
                   const hasOverflow = data && typeof data === "object" && !("error" in data) && data.models.length > 5
                   return (
-                    <text fg={muted}>{hasOverflow && scroll.isScrolled() ? "▲ more above" : " "}</text>
+                    <text fg={muted}>{hasOverflow && scroll.isScrolled() ? "\u25b2 more above" : " "}</text>
                   )
                 })()}
                 <scrollbox ref={(el) => scroll.scrollRef = el} flexDirection="column" gap={1} maxHeight={40} scrollbarOptions={{ visible: false }}>
                   {viewState() === "loading" ? (
-                    <text fg={muted}>Loading usage data…</text>
+                    <text fg={muted}>Loading usage data\u2026</text>
                   ) : viewState() === "error" ? (
                     <box flexDirection="column" gap={1}>
                       <text fg={red}><b>Error Fetching Usage</b></text>
@@ -823,7 +905,7 @@ export function registerUsageCommand(api: TuiPluginApi) {
                       const hasCost = totalCost > 0
                       const emptyResult = models.length === 0
                       return emptyResult ? (
-                        <text fg={muted}>— No activity for {label}</text>
+                        <text fg={muted}>\u2014 No activity for {label}</text>
                       ) : (
                         <box paddingBottom={1}>
                           <text fg={fg}>Total: {fmt(totalTokens)} tokens{hasCost ? ` (${fmtCost(totalCost)})` : ""}{(() => {
@@ -831,8 +913,8 @@ export function registerUsageCommand(api: TuiPluginApi) {
                             if (d.text === "\u2014") return ""
                             return `  ${d.arrow} ${d.text}`
                           })()}</text>
-                          <text fg={muted}>  ↑ Input:  {fmt(totalInput)} tokens</text>
-                          <text fg={muted}>  ↓ Output: {fmt(totalOutput)} tokens</text>
+                          <text fg={muted}>  \u2191 Input:  {fmt(totalInput)} tokens</text>
+                          <text fg={muted}>  \u2193 Output: {fmt(totalOutput)} tokens</text>
                           <text> </text>
                           <text fg={fg}><b>Per Model</b> (top {models.length})</text>
                           <text> </text>
@@ -859,16 +941,16 @@ export function registerUsageCommand(api: TuiPluginApi) {
                   const data = viewState()
                   const hasOverflow = data && typeof data === "object" && !("error" in data) && data.models.length > 5
                   return (
-                    <text fg={muted}>{hasOverflow && !scroll.isAtBottom() ? "▼ more below" : " "}</text>
+                    <text fg={muted}>{hasOverflow && !scroll.isAtBottom() ? "\u25bc more below" : " "}</text>
                   )
                 })()}
                 {hasLoadedOnce() && (
                   <text fg={muted}>
                     {gran === "month"
-                      ? "t today  ·  ← → month  ·  m mode  ·  r reload  ·  ↑↓ scroll"
+                      ? "t today  \u00b7  \u2190 \u2192 month  \u00b7  m mode  \u00b7  r reload  \u00b7  \u2191\u2193 scroll"
                       : gran === "week"
-                        ? "t today  ·  ← → week  ·  m mode  ·  r reload  ·  ↑↓ scroll"
-                        : "t today  ·  ← → day  ·  m mode  ·  r reload  ·  ↑↓ scroll"}
+                        ? "t today  \u00b7  \u2190 \u2192 week  \u00b7  m mode  \u00b7  r reload  \u00b7  \u2191\u2193 scroll"
+                        : "t today  \u00b7  \u2190 \u2192 day  \u00b7  m mode  \u00b7  r reload  \u00b7  \u2191\u2193 scroll"}
                   </text>
                 )}
               </box>
