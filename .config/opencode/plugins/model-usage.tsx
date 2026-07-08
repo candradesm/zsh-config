@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui"
 import UsageSidebar from "./model-usage/sidebar"
-import { registerUsageCommand } from "./model-usage/command"
+import { registerUsageCommand } from "./model-usage/usage"
 import { registerAnalyzeCommand } from "./model-usage/analyze"
 
 const tui: TuiPlugin = async (api) => {

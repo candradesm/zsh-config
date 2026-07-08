@@ -335,7 +335,7 @@ Each bar is proportional to the entry's percentage of the **total** (not relativ
 ---
 
 ## References
-- `model-usage/command.tsx` — reference: navigation + scroll dialog (`/usage`)
+- `model-usage/usage.tsx` — reference: navigation + scroll dialog (`/usage`)
 - `model-usage/analyze.tsx` — reference: tabbed dialog with scroll, tabs, and reload (`/analyze`)
 - `model-usage/helpers/format.ts` — shared utilities (`buildBar`, `fmt`, `buildProgressBar`, `getUsageColor`, `formatDuration`, `getQuotaLabel`)
 - `model-usage/helpers/debug.ts` — debug logging (`DEBUG`, `log`)
