@@ -445,6 +445,7 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                           return (
                             <box paddingBottom={1}>
                               <text fg={fg}><b>Raw System Prompt</b> ({safeFmt(sysTotal)} tokens)</text>
+                              {sysCat.name.includes("server") && <text fg={muted}>⚠ Server-estimated tokens</text>}
                               <text> </text>
                               {raw
                                 ? <text fg={fg}>{raw.length > 50000 ? raw.slice(0, 50000) + "\n\n… (truncated at 50000 chars)" : raw}</text>
@@ -458,6 +459,7 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                         return (
                           <box paddingBottom={1}>
                             <text fg={fg}><b>System Breakdown</b> ({safeFmt(sysTotal)} tokens)</text>
+                            {sysCat.name.includes("server") && <text fg={muted}>⚠ Server-estimated tokens</text>}
                             <text> </text>
                             <box flexDirection="column" gap={1}>
                               {sorted.map((entry: CategoryEntry, i: number) => {
