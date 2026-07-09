@@ -449,15 +449,9 @@ export function registerUsageCommand(api: TuiPluginApi) {
               loadData()
             })
             onCleanup(() => {
-              cleanedUp = true
               if (cleanupKeyLayer) {
                 try { cleanupKeyLayer() } catch { /* ignore */ }
                 cleanupKeyLayer = null
-              }
-              flushDiskSave()
-              if (db) {
-                try { db.close() } catch { /* ignore */ }
-                db = null
               }
             })
 
@@ -479,7 +473,7 @@ export function registerUsageCommand(api: TuiPluginApi) {
                 })()}
                 <scrollbox ref={(el) => scroll.scrollRef = el} flexDirection="column" gap={1} maxHeight={40} scrollbarOptions={{ visible: false }}>
                   {viewState() === "loading" ? (
-                    <text fg={muted}>Loading usage data\u2026</text>
+                    <text fg={muted}>Loading usage data{"\u2026"}</text>
                   ) : viewState() === "error" ? (
                     <box flexDirection="column" gap={1}>
                       <text fg={red}><b>Error Fetching Usage</b></text>
@@ -493,7 +487,7 @@ export function registerUsageCommand(api: TuiPluginApi) {
                       const hasCost = totalCost > 0
                       const emptyResult = models.length === 0
                       return emptyResult ? (
-                        <text fg={muted}>\u2014 No activity for {label}</text>
+                        <text fg={muted}>{"\u2014"} No activity for {label}</text>
                       ) : (
                         <box paddingBottom={1}>
                           <text fg={fg}>Total: {fmt(totalTokens)} tokens{hasCost ? ` (${fmtCost(totalCost)})` : ""}{(() => {
@@ -501,8 +495,8 @@ export function registerUsageCommand(api: TuiPluginApi) {
                             if (d.text === "\u2014") return ""
                             return `  ${d.arrow} ${d.text}`
                           })()}</text>
-                          <text fg={muted}>  \u2191 Input:  {fmt(totalInput)} tokens</text>
-                          <text fg={muted}>  \u2193 Output: {fmt(totalOutput)} tokens</text>
+                          <text fg={muted}>  {"\u2191"} Input:  {fmt(totalInput)} tokens</text>
+                          <text fg={muted}>  {"\u2193"} Output: {fmt(totalOutput)} tokens</text>
                           <text> </text>
                           <text fg={fg}><b>Per Model</b> (top {models.length})</text>
                           <text> </text>
@@ -543,6 +537,17 @@ export function registerUsageCommand(api: TuiPluginApi) {
                 )}
               </box>
             )
+          }, () => {
+            cleanedUp = true
+            if (cleanupKeyLayer) {
+              try { cleanupKeyLayer() } catch { /* ignore */ }
+              cleanupKeyLayer = null
+            }
+            flushDiskSave()
+            if (db) {
+              try { db.close() } catch { /* ignore */ }
+              db = null
+            }
           })
         },
       },
