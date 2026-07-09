@@ -12,7 +12,7 @@ import { aggregateModelStats } from "./helpers/models"
 import type { ModelUsageRecord, ModelStat } from "./helpers/models"
 import { splitSystemFragments } from "./helpers/fragments"
 import { loadBaseline } from "./db"
-import type { SystemFragment, SystemSnapshot, SystemSource } from "./types"
+import type { SystemFragment, SystemSnapshot, SystemSource, ToolDefSnapshot } from "./types"
 import type { Message, Part } from "@opencode-ai/sdk/v2"
 
 export interface CategoryEntry {
@@ -42,6 +42,7 @@ export interface AnalysisData {
   sessionCost: number
   hotspotResults: FormattedHotspotResult[]
   rawSystemText: string
+  rawToolDefsText: string
   toolDefsTokens: number
   syntheticTokens: number
 }
@@ -75,6 +76,30 @@ export function loadSystemSnapshot(sessionID: string): SystemSnapshot | null {
   } catch (err) {
     log("loadSystemSnapshot: error:", String(err))
   }
+  return null
+}
+
+// ── Tool definitions snapshot from server plugin ────────────────────────────
+// Reads the LATEST tool definitions persisted by model-usage-server.ts
+// via the "tool.definition" hook to tool-defs.json.
+export function loadToolDefsSnapshot(sessionID: string): ToolDefSnapshot | null {
+  const file = `${homedir()}/.config/opencode/plugins/model-usage/tool-defs.json`
+  log("loadToolDefsSnapshot: checking for session", sessionID)
+  try {
+    if (!existsSync(file)) {
+      log("loadToolDefsSnapshot: tool-defs.json not found")
+      return null
+    }
+    const raw = readFileSync(file, "utf-8")
+    const data = JSON.parse(raw) as Record<string, ToolDefSnapshot>
+    log("loadToolDefsSnapshot: loaded", Object.keys(data).length, "sessions, checking for", sessionID)
+    const entry = data[sessionID]
+    if (entry && typeof entry.t === "number" && entry.fragments && entry.fragments.length > 0) {
+      log("loadToolDefsSnapshot: FOUND entry for", sessionID, "t =", entry.t, "fragments =", entry.fragments.length)
+      return entry
+    }
+    log("loadToolDefsSnapshot: no entry for session", sessionID, "(found", Object.keys(data).length, "other sessions)")
+  } catch { /* ignore */ }
   return null
 }
 
@@ -117,6 +142,7 @@ export function analyzeSessionMessages(
       sessionCost: 0,
       hotspotResults: [],
       rawSystemText: serverSnapshot?.rawText ?? "",
+      rawToolDefsText: "",
       toolDefsTokens: 0,
       syntheticTokens: 0,
     }
@@ -162,6 +188,10 @@ export function analyzeSessionMessages(
   // exact). Used to scale the REASONING category's char/4 entries.
   let reasoningTelemetry = 0
   const rawSystemText = serverSnapshot?.rawText ?? ""
+  const toolDefsSnapshot = loadToolDefsSnapshot(currentSessionID)
+  log("analyze: toolDefsSnapshot =", toolDefsSnapshot ? `t=${toolDefsSnapshot.t} frags=${toolDefsSnapshot.fragments.length}` : "null")
+  const rawToolDefsText = toolDefsSnapshot?.rawText ?? ""
+  const toolDefsFragments: SystemFragment[] = toolDefsSnapshot?.fragments ?? []
 
   log("analyze: serverSnapshot =", serverSnapshot ? `t=${serverSnapshot.t} frags=${serverSnapshot.fragments?.length ?? 0}` : "null")
   log("analyze: baselineTokens (Tier 1) =", baselineTokens)
@@ -508,11 +538,29 @@ export function analyzeSessionMessages(
     })
   }
 
-  if (toolDefsTokens > 0) {
+  if (toolDefsTokens > 0 || toolDefsFragments.length > 0) {
+    // Use actual per-tool fragments from the server plugin when available,
+    // falling back to the residual total as a single entry.
+    let tdEntries: CategoryEntry[]
+    let tdTotal: number
+    if (toolDefsFragments.length > 0 && toolDefsTokens > 0) {
+      // Scale server-captured fragments to match the telemetry-derived residual
+      tdEntries = scaleEntries(toolDefsFragments, toolDefsTokens).map((f) => ({
+        label: f.label,
+        tokens: f.tokens,
+      }))
+      tdTotal = toolDefsTokens
+    } else if (toolDefsFragments.length > 0) {
+      tdEntries = toolDefsFragments.map((f) => ({ label: f.label, tokens: f.tokens }))
+      tdTotal = toolDefsFragments.reduce((s, f) => s + f.tokens, 0)
+    } else {
+      tdEntries = [{ label: "Tool schemas & overhead", tokens: toolDefsTokens }]
+      tdTotal = toolDefsTokens
+    }
     cats.push({
       name: "TOOL DEFS",
-      entries: [{ label: "Tool schemas & overhead", tokens: toolDefsTokens }],
-      totalTokens: toolDefsTokens,
+      entries: tdEntries,
+      totalTokens: tdTotal,
     })
   }
 
@@ -631,6 +679,7 @@ export function analyzeSessionMessages(
     sessionCost: totalCost,
     hotspotResults: hotspotResults,
     rawSystemText,
+    rawToolDefsText,
     toolDefsTokens,
     syntheticTokens: syntheticEntries.reduce((s, e) => s + e.tokens, 0),
   }

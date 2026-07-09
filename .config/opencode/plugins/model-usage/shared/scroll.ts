@@ -54,7 +54,7 @@ export function makeScrollState(
     if (!el || typeof el.scrollBy !== "function") return false
     const ch = el.clientHeight ?? el.height ?? 40
     const pageSize = Math.max(1, ch - 2)
-    el.scrollBy(0, -pageSize)
+    el.scrollBy(-pageSize)
     setIsAtBottom(false)
     setTimeout(() => {
         const top = scrollRef?.scrollTop ?? 0
@@ -69,7 +69,7 @@ export function makeScrollState(
     if (!el || typeof el.scrollBy !== "function") return false
     const ch = el.clientHeight ?? el.height ?? 40
     const pageSize = Math.max(1, ch - 2)
-    el.scrollBy(0, pageSize)
+    el.scrollBy(pageSize)
     setIsScrolled(true)
     setTimeout(() => {
         const st = scrollRef?.scrollTop ?? 0

@@ -2,11 +2,13 @@ import { homedir } from "node:os"
 import { mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs"
 import type { Model } from "@opencode-ai/sdk/v2"
 import { estimateTokens } from "./model-usage/helpers/tokens"
+import { log } from "./model-usage/helpers/debug"
 import { splitSystemFragments } from "./model-usage/helpers/fragments"
-import type { SystemSnapshot } from "./model-usage/types"
+import type { SystemSnapshot, ToolDefSnapshot } from "./model-usage/types"
 
 const TOKENS_DIR = `${homedir()}/.config/opencode/plugins/model-usage`
 const TOKENS_FILE = `${TOKENS_DIR}/system-tokens.json`
+const TOOL_DEFS_FILE = `${TOKENS_DIR}/tool-defs.json`
 const MAX_ENTRIES = 1000
 const PURGE_COUNT = 100
 // Only flush to disk if the token count drifted by this many tokens since the
@@ -16,6 +18,17 @@ const DRIFT_THRESHOLD = 32
 
 // Serialized writes to prevent race conditions from concurrent API calls
 let writeQueue: Promise<void> = Promise.resolve()
+
+// Track the current session so tool.definition can attribute tool defs.
+// system.transform always fires before tool.definition within a request.
+let currentSessionID: string | null = null
+// Accumulate tool definition text per session across requests.
+// Keyed by sessionID so multiple requests in the same session
+// accumulate all tool definitions for the raw text visor.
+const toolDefTextsBySession = new Map<string, Map<string, string>>()
+
+// In-memory cache to avoid reloading from disk on every tool.definition call
+let toolDefsCache: Record<string, ToolDefSnapshot> | null = null
 
 function ensureDir() {
   try { mkdirSync(TOKENS_DIR, { recursive: true }) } catch { /* ignore */ }
@@ -45,6 +58,33 @@ function saveTokens(data: Record<string, SystemSnapshot>): Promise<void> {
     ensureDir()
     try {
       writeFileSync(TOKENS_FILE, JSON.stringify(data))
+    } catch { /* ignore */ }
+  })
+  return writeQueue
+}
+
+function loadToolDefs(): Record<string, ToolDefSnapshot> {
+  ensureDir()
+  try {
+    if (existsSync(TOOL_DEFS_FILE)) {
+      const data = JSON.parse(readFileSync(TOOL_DEFS_FILE, "utf-8"))
+      log("loadToolDefs: loaded", Object.keys(data).length, "sessions from tool-defs.json")
+      return data
+    }
+  } catch { /* ignore */ }
+  return {}
+}
+
+function saveToolDefs(data: Record<string, ToolDefSnapshot>): Promise<void> {
+  const entries = Object.entries(data)
+  if (entries.length > MAX_ENTRIES) {
+    const sorted = entries.sort((a, b) => a[1].ts - b[1].ts)
+    data = Object.fromEntries(sorted.slice(PURGE_COUNT))
+  }
+  writeQueue = writeQueue.then(() => {
+    ensureDir()
+    try {
+      writeFileSync(TOOL_DEFS_FILE, JSON.stringify(data))
     } catch { /* ignore */ }
   })
   return writeQueue
@@ -97,6 +137,10 @@ export const ModelUsageServerPlugin = async () => {
       output: { system: string[] },
     ) => {
       const sessionID = _input.sessionID
+      currentSessionID = sessionID
+      toolDefsCache = loadToolDefs()
+      log("model-usage-server: system.transform for", sessionID, "tool defs cache reloaded:", Object.keys(toolDefsCache).length, "sessions")
+      log("model-usage-server: system.transform, sessionID =", sessionID, "tool defs accumulated:", toolDefTextsBySession.size, "sessions")
       if (!sessionID || !output.system || output.system.length === 0) return
       if (isTitleGenerator(output.system)) return
 
@@ -144,6 +188,62 @@ export const ModelUsageServerPlugin = async () => {
       cache.set(sessionID, entry)
       existing[sessionID] = entry
       await saveTokens(existing)
+    },
+    "tool.definition": async (
+      input: { toolID: string },
+      output: { description: string; parameters: unknown },
+    ) => {
+      const sid = currentSessionID
+      if (!sid) return
+      
+      // Reconstruct the full definition text as sent to the provider
+      const paramsText = output.parameters ? JSON.stringify(output.parameters) : ""
+      const defText = `Tool: ${input.toolID}\nDescription: ${output.description}\nParameters: ${paramsText}`
+      
+      // Get or create the per-session tool definition text map
+      if (!toolDefTextsBySession.has(sid)) {
+        toolDefTextsBySession.set(sid, new Map())
+      }
+      const sessionToolDefs = toolDefTextsBySession.get(sid)!
+      sessionToolDefs.set(input.toolID, defText)
+      
+      const tokens = estimateTokens(defText)
+      // Use in-memory cache instead of reloading from disk on every call.
+      // This avoids the write/read race where saveToolDefs hasn't flushed
+      // to disk before the next tool.definition call reads stale data.
+      const allDefs = toolDefsCache ?? loadToolDefs()
+      toolDefsCache = allDefs
+      const prev = allDefs[sid]
+      let fragments = prev?.fragments ? [...prev.fragments] : []
+      
+      const existIdx = fragments.findIndex((f) => f.label === input.toolID)
+      if (existIdx >= 0) {
+        fragments[existIdx] = { label: input.toolID, tokens }
+      } else {
+        fragments.push({ label: input.toolID, tokens })
+      }
+      
+      // Rebuild rawText from ALL accumulated definitions in this session
+      const rawText = Array.from(sessionToolDefs.entries())
+        .map(([, text]) => text)
+        .join("\n\n")
+      
+      const totalT = fragments.reduce((s, f) => s + f.tokens, 0)
+      allDefs[sid] = {
+        t: totalT,
+        ts: Date.now(),
+        fragments,
+        rawText,
+      }
+      await saveToolDefs(allDefs)
+      // Persist the cache reference so subsequent calls see the updated data
+      toolDefsCache = allDefs
+      
+      log("tool.definition: captured tool", input.toolID, "tokens=", tokens, "fragments count=", fragments.length)
+      const isMcp = input.toolID.includes("github_") || input.toolID.includes("mcp_") || input.toolID.includes("_list_") || input.toolID.includes("_create_") || input.toolID.includes("_search_")
+      if (isMcp) {
+        log("tool.definition: MCP TOOL DETECTED:", input.toolID, "tokens=", tokens)
+      }
     },
   }
 }
