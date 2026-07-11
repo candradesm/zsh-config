@@ -62,5 +62,24 @@ export interface SystemSnapshot {
   rawText?: string
 }
 
+// Shape persisted by model-usage-server.ts to tool-defs.json
+export interface ToolDefFragment {
+  /** Human-readable tool label (e.g., "bash", "read", "grep") */
+  label: string
+  /** char/4 estimate of the tool's JSON schema */
+  tokens: number
+}
+
+export interface ToolDefSnapshot {
+  /** char/4 estimate of all assembled tool definitions */
+  t: number
+  /** ms timestamp of last measurement */
+  ts: number
+  /** per-tool char/4 breakdown */
+  fragments: ToolDefFragment[]
+  /** raw assembled tool definitions text */
+  rawText: string
+}
+
 export type SystemSource = "baseline DB" | "telemetry (est.)" | "server"
 

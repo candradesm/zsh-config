@@ -82,6 +82,7 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
           const [activeTab, setActiveTab] = createSignal(0)
           const [showRaw, setShowRaw] = createSignal(false)
           const [rawSystemText, setRawSystemText] = createSignal("")
+          const [rawToolDefsText, setRawToolDefsText] = createSignal("")
           const [modelStats, setModelStats] = createSignal<ModelStat[]>([])
           const [switchesCount, setSwitchesCount] = createSignal<number>(0)
           const [compactionSummary, setCompactionSummary] = createSignal<CompactionSummary | null>(null)
@@ -104,6 +105,9 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
             if (hasToolsSection()) t.push({ id: "tools", label: "Per-Tool" })
             const sysCat = categories().find((c: Category) => c.name.startsWith("SYSTEM"))
             if (sysCat && sysCat.entries.length >= 2) t.push({ id: "system", label: "System" })
+            // Show Tool Defs tab when the TOOL DEFS category has 2+ entries (per-tool breakdown)
+            const tdCat = categories().find((c: Category) => c.name === "TOOL DEFS")
+            if (tdCat && tdCat.entries.length >= 2) t.push({ id: "tooldefs", label: "Tool Defs" })
             if (modelStats().length > 1) t.push({ id: "models", label: "Models" })
             t.push({ id: "extra", label: "Extra Info" })
             return t
@@ -163,6 +167,7 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
               const data = analyzeSessionMessages(messages, currentSessionID, serverSnapshot, baselineTokens)
 
               setRawSystemText(data.rawSystemText)
+              setRawToolDefsText(data.rawToolDefsText)
               setCategories(data.categories)
               setEstimatedTotal(data.estimatedTotal)
               setTopContributors(data.topContributors)
@@ -190,6 +195,7 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
             loadGuard.invalidate()
             setShowRaw(false)
             setRawSystemText("")
+            setRawToolDefsText("")
             setLoading(true)
             // Don't clear data — keep showing the old view while fetching.
             // Mirrors /usage dialog: loading spinner only appears when there's
@@ -219,12 +225,16 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
               setExpandedHotspotIndex((prev) => (prev === idx ? null : idx))
             }
 
-            const copyRawSystemText = async () => {
+            const copyActiveRawText = async () => {
               const list = tabs()
               const currentTab = list[Math.min(activeTab(), list.length - 1)]
-              if (currentTab?.id !== "system" || !showRaw()) return
+              if (!showRaw()) return
 
-              const text = rawSystemText()
+              const text = currentTab?.id === "system"
+                ? rawSystemText()
+                : currentTab?.id === "tooldefs"
+                  ? rawToolDefsText()
+                  : ""
               if (!text) return
 
               const success = await writeClipboard(text)
@@ -273,9 +283,10 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                   { name: "analyze.toggleRaw",  title: "Raw Prompt",   run: async () => {
                     const list = tabs()
                     const idx = Math.min(activeTab(), list.length - 1)
-                    if (list[idx]?.id === "system") setShowRaw((s) => !s)
+                    const id = list[idx]?.id
+                    if (id === "system" || id === "tooldefs") setShowRaw((s) => !s)
                   } },
-                  { name: "analyze.copyRaw",    title: "Copy Raw Prompt", run: async () => { await copyRawSystemText() } },
+                  { name: "analyze.copyRaw",    title: "Copy Raw Prompt", run: async () => { await copyActiveRawText() } },
                   { name: "analyze.reload",     title: "Reload",      run: async () => { reload() } },
                   { name: "analyze.expand1",    title: "Toggle Expand Message 1", run: () => { toggleExpand(0) } },
                   { name: "analyze.expand2",    title: "Toggle Expand Message 2", run: () => { toggleExpand(1) } },
@@ -445,6 +456,7 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                           return (
                             <box paddingBottom={1}>
                               <text fg={fg}><b>Raw System Prompt</b> ({safeFmt(sysTotal)} tokens)</text>
+                              {sysCat.name.includes("server") && <text fg={muted}>⚠ Server-estimated tokens</text>}
                               <text> </text>
                               {raw
                                 ? <text fg={fg}>{raw.length > 50000 ? raw.slice(0, 50000) + "\n\n… (truncated at 50000 chars)" : raw}</text>
@@ -458,10 +470,57 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                         return (
                           <box paddingBottom={1}>
                             <text fg={fg}><b>System Breakdown</b> ({safeFmt(sysTotal)} tokens)</text>
+                            {sysCat.name.includes("server") && <text fg={muted}>⚠ Server-estimated tokens</text>}
                             <text> </text>
                             <box flexDirection="column" gap={1}>
                               {sorted.map((entry: CategoryEntry, i: number) => {
                                 const pct = sysTotal > 0 ? (entry.tokens / sysTotal) * 100 : 0
+                                const bar = buildBar(pct, BAR_WIDTH)
+                                return (
+                                  <box key={entry.label + i} flexDirection="column" gap={1}>
+                                    <text fg={fg}>{entry.label}</text>
+                                    <text fg={muted}>{safeFmt(entry.tokens)} tokens ({pct.toFixed(1)}%)</text>
+                                    <text fg={fg}>{bar}</text>
+                                  </box>
+                                )
+                              })}
+                            </box>
+                          </box>
+                        )
+                      }
+
+                      // ── Tool Defs tab ─────────────────────────────────
+                      if (tab.id === "tooldefs") {
+                        const tdCat = categories().find((c: Category) => c.name === "TOOL DEFS")
+                        if (!tdCat || tdCat.entries.length < 2) {
+                          return <text fg={muted}>No tool definition breakdown data.</text>
+                        }
+                        const tdTotal = tdCat.totalTokens
+
+                        // Raw tool defs visor (toggle with `v`)
+                        if (showRaw()) {
+                          const raw = rawToolDefsText()
+                          return (
+                            <box paddingBottom={1}>
+                              <text fg={fg}><b>Raw Tool Definitions</b> ({safeFmt(tdTotal)} tokens)</text>
+                              <text fg={muted}>⚠ Server-estimated tokens</text>
+                              <text> </text>
+                              {raw
+                                ? <text fg={fg}>{raw.length > 50000 ? raw.slice(0, 50000) + "\n\n… (truncated at 50000 chars)" : raw}</text>
+                                : <text fg={muted}>No raw text stored for this session.</text>}
+                            </box>
+                          )
+                        }
+
+                        const sorted = [...tdCat.entries].sort((a: CategoryEntry, b: CategoryEntry) => b.tokens - a.tokens)
+                        return (
+                          <box paddingBottom={1}>
+                            <text fg={fg}><b>Tool Definitions</b> ({safeFmt(tdTotal)} tokens)</text>
+                            <text fg={muted}>⚠ Server-estimated tokens</text>
+                            <text> </text>
+                            <box flexDirection="column" gap={1}>
+                              {sorted.map((entry: CategoryEntry, i: number) => {
+                                const pct = tdTotal > 0 ? (entry.tokens / tdTotal) * 100 : 0
                                 const bar = buildBar(pct, BAR_WIDTH)
                                 return (
                                   <box key={entry.label + i} flexDirection="column" gap={1}>
@@ -652,13 +711,14 @@ export function registerAnalyzeCommand(api: TuiPluginApi) {
                   const idx = Math.min(activeTab(), list.length - 1)
                   const currentTab = list[idx]
                   const isSys = currentTab?.id === "system"
+                  const isToolDefs = currentTab?.id === "tooldefs"
                   const isExtra = currentTab?.id === "extra"
                   const hasHotspots = hotspotResults().length > 0
 
                   return (
                     <box flexDirection="row" gap={1}>
                       <text fg={muted}>← → tabs  ·  PgUp/Dn ↑↓ scroll</text>
-                      {isSys && (
+                      {(isSys || isToolDefs) && (
                         <>
                           <text fg={muted}>·  v raw</text>
                           {showRaw() && (

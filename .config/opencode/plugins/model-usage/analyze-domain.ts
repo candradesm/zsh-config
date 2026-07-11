@@ -12,7 +12,7 @@ import { aggregateModelStats } from "./helpers/models"
 import type { ModelUsageRecord, ModelStat } from "./helpers/models"
 import { splitSystemFragments } from "./helpers/fragments"
 import { loadBaseline } from "./db"
-import type { SystemFragment, SystemSnapshot, SystemSource } from "./types"
+import type { SystemFragment, SystemSnapshot, SystemSource, ToolDefSnapshot } from "./types"
 import type { Message, Part } from "@opencode-ai/sdk/v2"
 
 export interface CategoryEntry {
@@ -42,6 +42,9 @@ export interface AnalysisData {
   sessionCost: number
   hotspotResults: FormattedHotspotResult[]
   rawSystemText: string
+  rawToolDefsText: string
+  toolDefsTokens: number
+  syntheticTokens: number
 }
 
 // ── Tier 3: system snapshot from server plugin ──────────────────────────────
@@ -73,6 +76,30 @@ export function loadSystemSnapshot(sessionID: string): SystemSnapshot | null {
   } catch (err) {
     log("loadSystemSnapshot: error:", String(err))
   }
+  return null
+}
+
+// ── Tool definitions snapshot from server plugin ────────────────────────────
+// Reads the LATEST tool definitions persisted by model-usage-server.ts
+// via the "tool.definition" hook to tool-defs.json.
+export function loadToolDefsSnapshot(sessionID: string): ToolDefSnapshot | null {
+  const file = `${homedir()}/.config/opencode/plugins/model-usage/tool-defs.json`
+  log("loadToolDefsSnapshot: checking for session", sessionID)
+  try {
+    if (!existsSync(file)) {
+      log("loadToolDefsSnapshot: tool-defs.json not found")
+      return null
+    }
+    const raw = readFileSync(file, "utf-8")
+    const data = JSON.parse(raw) as Record<string, ToolDefSnapshot>
+    log("loadToolDefsSnapshot: loaded", Object.keys(data).length, "sessions, checking for", sessionID)
+    const entry = data[sessionID]
+    if (entry && typeof entry.t === "number" && entry.fragments && entry.fragments.length > 0) {
+      log("loadToolDefsSnapshot: FOUND entry for", sessionID, "t =", entry.t, "fragments =", entry.fragments.length)
+      return entry
+    }
+    log("loadToolDefsSnapshot: no entry for session", sessionID, "(found", Object.keys(data).length, "other sessions)")
+  } catch { /* ignore */ }
   return null
 }
 
@@ -115,6 +142,9 @@ export function analyzeSessionMessages(
       sessionCost: 0,
       hotspotResults: [],
       rawSystemText: serverSnapshot?.rawText ?? "",
+      rawToolDefsText: "",
+      toolDefsTokens: 0,
+      syntheticTokens: 0,
     }
   }
 
@@ -126,6 +156,8 @@ export function analyzeSessionMessages(
   let userCounter = 0
   let assistantCounter = 0
   let reasoningCounter = 0
+  let syntheticTokensBeforeFirstAssistant: number = 0
+  const syntheticEntries: CategoryEntry[] = []
 
   const modelUsageRecords: ModelUsageRecord[] = []
   const userCandidates: HotspotCandidate[] = []
@@ -156,6 +188,10 @@ export function analyzeSessionMessages(
   // exact). Used to scale the REASONING category's char/4 entries.
   let reasoningTelemetry = 0
   const rawSystemText = serverSnapshot?.rawText ?? ""
+  const toolDefsSnapshot = loadToolDefsSnapshot(currentSessionID)
+  log("analyze: toolDefsSnapshot =", toolDefsSnapshot ? `t=${toolDefsSnapshot.t} frags=${toolDefsSnapshot.fragments.length}` : "null")
+  const rawToolDefsText = toolDefsSnapshot?.rawText ?? ""
+  const toolDefsFragments: SystemFragment[] = toolDefsSnapshot?.fragments ?? []
 
   log("analyze: serverSnapshot =", serverSnapshot ? `t=${serverSnapshot.t} frags=${serverSnapshot.fragments?.length ?? 0}` : "null")
   log("analyze: baselineTokens (Tier 1) =", baselineTokens)
@@ -244,6 +280,19 @@ export function analyzeSessionMessages(
           text += part.text ?? ""
         }
       }
+      // Count synthetic text parts separately
+      for (const part of parts) {
+        if (part.type === "text" && part.synthetic === true) {
+          const synText = part.text ?? ""
+          if (synText.trim().length > 0) {
+            const synTokens = estimateTokens(synText)
+            syntheticEntries.push({
+              label: `Synthetic: ${makePreview(synText)}`,
+              tokens: synTokens,
+            })
+          }
+        }
+      }
       // Also extract text from file parts
       for (const part of parts) {
         if (part.type === "file") {
@@ -287,6 +336,7 @@ export function analyzeSessionMessages(
         const assistantBefore = assistantEntries.reduce((s, e) => s + e.tokens, 0)
         const toolBefore = Array.from(toolMap.values()).reduce((a, b) => a + b, 0)
         const reasoningBefore = reasoningEntries.reduce((s, e) => s + e.tokens, 0)
+        syntheticTokensBeforeFirstAssistant = syntheticEntries.reduce((s, e) => s + e.tokens, 0)
         conversationTokensBeforeFirstAssistant = userBefore + assistantBefore + toolBefore + reasoningBefore
         log("analyze: first nonzero assistant", msgId, "conversationBefore =", conversationTokensBeforeFirstAssistant, "(user =", userBefore, "assistant =", assistantBefore, "tool =", toolBefore, "reasoning =", reasoningBefore, ") input =", info.tokens.input, "cache.read =", info.tokens?.cache?.read ?? 0, "cache.write =", info.tokens?.cache?.write ?? 0)
       }
@@ -410,19 +460,10 @@ export function analyzeSessionMessages(
   // ── Build categories ──────────────────────────────────────────────────────
   const cats: Category[] = []
 
-  // ── SYSTEM token resolution (tiered, provider-agnostic) ───────────────────
-  // Tier 1: V2 baseline DB (exact text, char/4).
-  // Tier 2: first nonzero assistant telemetry, ONLY when clean
-  //         (cache.read === 0 on that call). Formula reconstitutes
-  //         the raw prompt: system = raw − user − tools, where
-  //         raw = tokens.input + cache.read + cache.write.
-  //         OpenCode stores tokens.input already adjusted
-  //         (session.ts:366), so we must ADD cache counters back.
-  // Tier 3 (contaminated/compacted): server plugin snapshot
-  //         (char/4, latest), with ⚠.
-  // Tier 4 (last resort): 0 — no system data available.
-  let systemTokens: number = 0
-  let systemSource: SystemSource | null = null
+  // ── SYSTEM token resolution (cross-validated, tiered) ────────────────────
+  // Cross-validated tier resolution: server snapshot (system-only) is the
+  // most accurate source. Tier 2 telemetry provides the raw prompt size
+  // which we use as a validation check and to compute tool defs residual.
   const serverTotal = serverSnapshot?.t ?? null
   // Re-split from rawText with the current splitSystemFragments logic.
   // This makes fragment display immune to stale server-cached fragments
@@ -433,38 +474,37 @@ export function analyzeSessionMessages(
     ? splitSystemFragments(rawSysText)
     : (serverSnapshot?.fragments ?? [])
 
-  if (baselineTokens !== null) {
-    // Tier 1 — V2 baseline DB.
-    systemTokens = baselineTokens
-    systemSource = "baseline DB"
-    log("analyze: SYSTEM Tier 1 (baseline DB) =", systemTokens)
-  } else {
-    // Tier 2 — telemetry, only when the first nonzero call is clean.
-    const info = firstNonzeroAssistant?.info as any
-    const inputTok = info?.tokens?.input ?? 0
-    const cacheReadTok = info?.tokens?.cache?.read ?? 0
-    const cacheWriteTok = info?.tokens?.cache?.write ?? 0
-    const conversationBefore = conversationTokensBeforeFirstAssistant ?? 0
-    const clean = firstNonzeroAssistant !== null && cacheReadTok === 0
-    log("analyze: SYSTEM Tier 2 check: firstNonzero =", !!firstNonzeroAssistant, "input =", inputTok, "cacheRead =", cacheReadTok, "cacheWrite =", cacheWriteTok, "conversationBefore =", conversationBefore, "clean =", clean, "compacted =", sessionWasCompacted)
+  let tier2SystemWithTools: number | null = null
+  let systemTokens: number = 0
+  let systemSource: SystemSource | null = null
+  let toolDefsTokens: number = 0
 
-    if (clean && !sessionWasCompacted) {
-      // Reconstitute raw prompt: input + cache.read + cache.write,
-      // then subtract ALL conversation content that preceded this
-      // assistant (user + assistant + tools + reasoning) to isolate
-      // the system prompt.
-      const raw = rawPromptTokens(info?.tokens ?? {})
-      systemTokens = Math.max(0, raw - conversationBefore)
-      systemSource = "telemetry (est.)"
-      log("analyze: SYSTEM Tier 2 (telemetry) raw =", raw, "conversationBefore =", conversationBefore, "→ system =", systemTokens)
-    } else if (serverTotal !== null) {
-      // Tier 3 — contaminated/compacted: server plugin char/4.
-      systemTokens = serverTotal
-      systemSource = "server"
-      log("analyze: SYSTEM Tier 3 (server, contaminated/compacted) =", systemTokens)
-    } else {
-      log("analyze: SYSTEM no tier available (0)")
+  // Always compute Tier 2 raw when telemetry is available (no clean gate)
+  if (firstNonzeroAssistant !== null && !sessionWasCompacted) {
+    const info = firstNonzeroAssistant?.info as any
+    const raw = rawPromptTokens(info?.tokens ?? {})
+    const conversationBefore = conversationTokensBeforeFirstAssistant ?? 0
+    tier2SystemWithTools = Math.max(0, raw - conversationBefore)
+    log("analyze: SYSTEM Tier 2 computed: raw =", raw, "conversationBefore =", conversationBefore, "→ tier2SystemWithTools =", tier2SystemWithTools)
+  }
+
+  // Cross-validate: server snapshot is the most accurate for system-only
+  if (serverTotal !== null) {
+    systemTokens = serverTotal
+    systemSource = "server"
+    log("analyze: SYSTEM using server snapshot =", systemTokens)
+    // Compute tool defs residual: telemetry total minus everything we account for
+    if (tier2SystemWithTools !== null && tier2SystemWithTools > systemTokens) {
+      const synthBefore = syntheticTokensBeforeFirstAssistant ?? 0
+      toolDefsTokens = Math.max(0, tier2SystemWithTools - systemTokens - synthBefore)
+      log("analyze: TOOL DEFS residual:", toolDefsTokens, "(tier2 =", tier2SystemWithTools, "system =", systemTokens, "synth =", synthBefore, ")")
     }
+  } else if (tier2SystemWithTools !== null) {
+    systemTokens = tier2SystemWithTools
+    systemSource = "telemetry (est.)"
+    log("analyze: SYSTEM no server snapshot, using telemetry (est.) =", systemTokens, "(includes tool defs)")
+  } else {
+    log("analyze: SYSTEM no tier available (0)")
   }
 
   // Build SYSTEM entries. When we have a Tier 1/2 total AND server
@@ -479,7 +519,7 @@ export function analyzeSessionMessages(
     const warn = systemSource === "server"
     const sourceLabel: string = systemSource ?? "(unknown)"
     systemName = `SYSTEM — ${sourceLabel}${warn ? " ⚠" : ""}`
-    if (serverFrags.length > 0 && (systemSource === "baseline DB" || systemSource === "telemetry (est.)")) {
+    if (serverFrags.length > 0) {
       // Scale fragments to the authoritative total.
       systemEntries = scaleEntries(serverFrags, systemTokens).map((f) => ({
         label: f.label,
@@ -497,6 +537,42 @@ export function analyzeSessionMessages(
       totalTokens: systemTokens,
     })
   }
+
+  if (toolDefsTokens > 0 || toolDefsFragments.length > 0) {
+    // Use actual per-tool fragments from the server plugin when available,
+    // falling back to the residual total as a single entry.
+    let tdEntries: CategoryEntry[]
+    let tdTotal: number
+    if (toolDefsFragments.length > 0 && toolDefsTokens > 0) {
+      // Scale server-captured fragments to match the telemetry-derived residual
+      tdEntries = scaleEntries(toolDefsFragments, toolDefsTokens).map((f) => ({
+        label: f.label,
+        tokens: f.tokens,
+      }))
+      tdTotal = toolDefsTokens
+    } else if (toolDefsFragments.length > 0) {
+      tdEntries = toolDefsFragments.map((f) => ({ label: f.label, tokens: f.tokens }))
+      tdTotal = toolDefsFragments.reduce((s, f) => s + f.tokens, 0)
+    } else {
+      tdEntries = [{ label: "Tool schemas & overhead", tokens: toolDefsTokens }]
+      tdTotal = toolDefsTokens
+    }
+    cats.push({
+      name: "TOOL DEFS",
+      entries: tdEntries,
+      totalTokens: tdTotal,
+    })
+  }
+
+  if (syntheticEntries.length > 0) {
+    const syntheticTotal = syntheticEntries.reduce((s, e) => s + e.tokens, 0)
+    cats.push({
+      name: "SYNTHETICS",
+      entries: syntheticEntries,
+      totalTokens: syntheticTotal,
+    })
+  }
+
   log("analyze: systemTokens final =", systemTokens, "source =", systemSource, "entries =", systemEntries.length)
 
   if (userEntries.length > 0) {
@@ -603,5 +679,8 @@ export function analyzeSessionMessages(
     sessionCost: totalCost,
     hotspotResults: hotspotResults,
     rawSystemText,
+    rawToolDefsText,
+    toolDefsTokens,
+    syntheticTokens: syntheticEntries.reduce((s, e) => s + e.tokens, 0),
   }
 }

@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite"
 import type { ModelUsage, UsageRow, UsageData } from "./types"
+import { log, DEBUG } from "./helpers/debug"
 
 export interface RawUsageRow {
   time_created: number
@@ -173,9 +174,21 @@ export function loadBaseline(dbOrPath: Database | string, sessionID: string): st
       .query(`SELECT name FROM sqlite_master WHERE type='table' AND name='session_context_epoch'`)
       .get() as { name: string } | undefined
     if (!table) return null
+    log("loadBaseline: session_context_epoch table exists, checking for session", sessionID)
     const row = db
       .query(`SELECT baseline FROM session_context_epoch WHERE session_id = ?`)
       .get(sessionID) as { baseline: string } | undefined
+    log("loadBaseline: query result for session", sessionID, ":", row ? `baseline length=${row.baseline.length}` : "NOT FOUND")
+    if (DEBUG) {
+      try {
+        const sessionRow = db.query(`SELECT version FROM session WHERE id = ?`).get(sessionID) as { version: string } | undefined
+        log("loadBaseline: session version:", sessionRow?.version ?? "UNKNOWN")
+      } catch { /* ignore */ }
+      try {
+        const countRow = db.query(`SELECT count(*) as c FROM session_context_epoch`).get() as { c: number } | undefined
+        log("loadBaseline: total session_context_epoch rows:", countRow?.c ?? 0)
+      } catch { /* ignore */ }
+    }
     if (!row || typeof row.baseline !== "string" || row.baseline.length === 0) return null
     return row.baseline
   } catch {
