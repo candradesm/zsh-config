@@ -4,7 +4,7 @@ Complete LazyVim configuration with Android/Kotlin development support.
 
 ## Features
 
-- **Kotlin & Java LSP** — autocomplete, goto definition, refactoring, hover docs
+- **Kotlin & Java LSP** — dual LSP support (fwcd default, JetBrains opt-in), autocomplete, goto definition, refactoring, hover docs
 - **Android Development** — SDK detection, XML layout support
 - **Auto-formatting** — ktlint for Kotlin, google-java-format for Java (on save)
 - **Debugging** — Kotlin debugger with attach-to-process support
@@ -17,6 +17,7 @@ Complete LazyVim configuration with Android/Kotlin development support.
 | Shortcut | Action |
 |----------|--------|
 | `<leader>cl` | Check LSP health (`:checkhealth lsp`) |
+| `<leader>lk` | Kotlin actions prefix (JetBrains LSP only) — `a` (code actions), `q` (quick fix), `o` (organize imports), `f` (format) |
 
 ### Commands
 
@@ -79,6 +80,13 @@ This config provides full IDE support for Android/Kotlin development.
 - `ANDROID_SDK_ROOT` — Android SDK path (auto-detected if not set)
 - `GRADLE_JVM_TARGET` — JVM target version (auto-detected from project)
 - `GRADLE_CACHE` — enable/disable Gradle caching (default: `true`)
+- `KOTLIN_LSP` — set to `jetbrains` to use JetBrains kotlin-lsp instead of fwcd (default: unset)
+
+### Visual Indicators
+
+When editing a Kotlin file:
+- **Statusline** shows `Kotlin-LSP` (blue) for fwcd or `Kotlin-LSP (JetBrains)` (orange) for JetBrains
+- **Notification** appears on LSP attach identifying the active server
 
 ### Optional Extras
 
@@ -90,15 +98,51 @@ The file `lua/plugins/android-extras.lua` contains disabled-by-default plugins f
 
 Uncomment the sections you want in that file to enable them.
 
-## Troubleshooting
+## Dual Kotlin LSP Support
 
-### Kotlin LSP not working
+This config supports two Kotlin language servers (Zed-style):
+
+| Server | Default | Scope | Command |
+|--------|---------|-------|---------|
+| **kotlin-language-server** ([fwcd](https://github.com/fwcd/kotlin-language-server)) | ✅ Yes | Community | `:MasonInstall kotlin-language-server` |
+| **kotlin-lsp** ([JetBrains](https://github.com/Kotlin/kotlin-lsp)) | ❌ Opt-in | Official (pre-alpha) | `:MasonInstall kotlin-lsp` |
+
+### Switching to JetBrains kotlin-lsp
+
+Set the env var when starting Neovim:
+
+```bash
+KOTLIN_LSP=jetbrains nvim
+```
+
+Or set globally in your shell config (`~/.zshrc`):
+
+```bash
+export KOTLIN_LSP=jetbrains
+```
+
+Or set it in your `init.lua` / `config.lua`:
+
+```lua
+vim.g.kotlin_lsp = "jetbrains"
+```
+
+When using JetBrains kotlin-lsp, the plugin also enables:
+- **Inlay hints** — type hints, parameter names
+- **Code actions** — `:KotlinCodeActions`, `:KotlinQuickFix`, `:KotlinOrganizeImports`
+- **File templates** — new-file prompts with template interpolation
+- **Per-project config** — `.kotlin-lsp.lua` in project root
+
+### Troubleshooting
+
+#### Kotlin LSP not working
 
 - Check LSP health: `<leader>cl`
-- Verify kotlin-language-server is installed: `:Mason`
+- Verify the active server is installed: `:Mason`
 - Check logs: `:LspLog`
 
-### Version compatibility
+#### Version compatibility
 
 - kotlin-language-server (fwcd) supports Kotlin ≤ 2.2.x
-- For Kotlin 2.3.0+, consider switching to official `Kotlin/kotlin-lsp`
+- JetBrains kotlin-lsp is recommended for Kotlin 2.3.0+
+- kotlin-lsp bundles its own JRE (v261+) — no JDK installation required

@@ -1,6 +1,6 @@
 -- Android Development Configuration
 -- Adds Android-specific enhancements on top of the Kotlin/Gradle setup.
--- Does NOT touch LSP classpath — kotlin-language-server handles its own Gradle sync.
+-- Does NOT touch LSP classpath — both kotlin-language-server and kotlin-lsp handle their own Gradle sync.
 
 local gradle = require("utils.gradle")
 local android = require("utils.android")
@@ -115,8 +115,32 @@ return {
         return { fg = "#2196F3" }
       end
 
+      local function kotlin_lsp_indicator()
+        if vim.bo.filetype ~= "kotlin" then
+          return ""
+        end
+        local jetbrains = vim.env.KOTLIN_LSP == "jetbrains" or vim.g.kotlin_lsp == "jetbrains"
+        return jetbrains and "Kotlin-LSP (JetBrains)" or "Kotlin-LSP"
+      end
+
+      local function kotlin_lsp_color()
+        if vim.bo.filetype ~= "kotlin" then
+          return {}
+        end
+        local jetbrains = vim.env.KOTLIN_LSP == "jetbrains" or vim.g.kotlin_lsp == "jetbrains"
+        return jetbrains and { fg = "#FF5722" } or { fg = "#2196F3" }
+      end
+
       opts.sections = opts.sections or {}
       opts.sections.lualine_x = opts.sections.lualine_x or {}
+
+      table.insert(opts.sections.lualine_x, 1, {
+        kotlin_lsp_indicator,
+        cond = function()
+          return vim.bo.filetype == "kotlin"
+        end,
+        color = kotlin_lsp_color,
+      })
 
       table.insert(opts.sections.lualine_x, 1, {
         gradle_indicator,
