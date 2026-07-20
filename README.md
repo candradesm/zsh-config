@@ -29,7 +29,7 @@ Complete LazyVim configuration with:
   - SDK detection and statusline indicators
   - Markdown with live preview
 - **Languages:** Kotlin, Java, XML, Markdown, TOML, Groovy (Gradle)
-- **Note:** kotlin-language-server (fwcd) supports Kotlin ≤ 2.2.x. For Kotlin 2.3.0+, consider switching to the official [Kotlin/kotlin-lsp](https://github.com/Kotlin/kotlin-lsp).
+- **Kotlin LSP:** Dual LSP support — defaults to the community `kotlin-language-server` (fwcd). For full IntelliJ-level indexing (Kotlin 2.3.0+), switch to the official JetBrains backend with `KOTLIN_LSP=jetbrains`. The JetBrains server auto-cleans up stale RocksDB locks on shutdown to prevent "LOCK: Resource temporarily unavailable" errors.
 
 ### AI Assistant
 - Opencode configuration with specialized agents and plugins
@@ -53,7 +53,6 @@ Complete LazyVim configuration with:
 - **Nerd-fonts terminal**: [Alacritty](https://alacritty.org/) or [Ghostty](https://ghostty.org/)
 
 ### Optional (for AI & Development)
-- **RTK**: `brew install rtk` (reduces LLM token consumption by 60-90%)
 - **Node.js & npm**: `brew install node` (for Markdown preview in nvim)
 
 ### Optional (for Android Development)
@@ -84,7 +83,7 @@ mv ~/.config/nvim{,.bak.$(date +%Y%m%d)} 2>/dev/null || true
 mv ~/.config/opencode{,.bak.$(date +%Y%m%d)} 2>/dev/null || true
 
 # 4. Install dependencies
-brew install neovim thefuck fzf fd rtk
+brew install neovim thefuck fzf fd
 
 # 5. Clone this repo and set up configs
 git clone https://github.com/candradesm/zsh-config ~/.config-temp
@@ -136,7 +135,6 @@ This repo includes a pre-configured [Opencode](https://opencode.ai/) setup with:
 - **TUI Plugins:** Copilot usage sidebar (quota + session tracking), jungle-mode indicator
 - **Server Plugins:** Desktop notifications, jungle-mode persona injection
 - **Configuration:** Ready-to-use settings for AI-assisted development
-- **RTK (Rust Token Killer):** CLI proxy that reduces LLM token consumption by 60-90% on common dev commands. Install via `brew install rtk` and run `rtk init -g --opencode`
 
 See [.config/opencode/AGENTS.md](.config/opencode/AGENTS.md) for agent definitions.
 See [.config/opencode/README.md](.config/opencode/README.md) for plugins, skills, and full documentation.
