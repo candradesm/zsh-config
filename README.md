@@ -58,6 +58,7 @@ Complete LazyVim configuration with:
 ### Optional (for Android Development)
 - **Java JDK 21+**: `brew install openjdk` (or from [Adoptium](https://adoptium.net/))
 - **Android SDK with ADB**: Install via Android Studio or `brew install android-platform-tools`
+- **JetBrains kotlin-lsp** (opt-in): `brew install JetBrains/utils/kotlin-lsp` (for full IntelliJ-level indexing; see Kotlin LSP section)
 
 ## Installation
 
