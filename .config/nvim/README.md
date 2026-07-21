@@ -85,7 +85,7 @@ This config provides full IDE support for Android/Kotlin development.
 ### Visual Indicators
 
 When editing a Kotlin file:
-- **Statusline** shows `Kotlin-LSP` (blue) for fwcd or `Kotlin-LSP (JetBrains)` (orange) for JetBrains
+- **Statusline** shows `Kotlin-LSP` (blue) for fwcd or `Kotlin-LSP (JetBrains)` (purple) for JetBrains
 - **Notification** appears on LSP attach identifying the active server
 
 ### Optional Extras

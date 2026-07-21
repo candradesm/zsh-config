@@ -128,7 +128,7 @@ return {
           return {}
         end
         local jetbrains = vim.env.KOTLIN_LSP == "jetbrains" or vim.g.kotlin_lsp == "jetbrains"
-        return jetbrains and { fg = "#FF5722" } or { fg = "#2196F3" }
+        return jetbrains and { fg = "#BB86FC" } or { fg = "#2196F3" }
       end
 
       opts.sections = opts.sections or {}
