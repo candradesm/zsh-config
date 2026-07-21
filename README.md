@@ -29,7 +29,7 @@ Complete LazyVim configuration with:
   - SDK detection and statusline indicators
   - Markdown with live preview
 - **Languages:** Kotlin, Java, XML, Markdown, TOML, Groovy (Gradle)
-- **Kotlin LSP:** Dual LSP support — defaults to the community `kotlin-language-server` (fwcd). For full IntelliJ-level indexing (Kotlin 2.3.0+), switch to the official JetBrains backend with `KOTLIN_LSP=jetbrains`. The JetBrains server auto-cleans up stale RocksDB locks on shutdown to prevent "LOCK: Resource temporarily unavailable" errors.
+- **Kotlin LSP:** Dual LSP support — defaults to the community `kotlin-language-server` (fwcd). For full IntelliJ-level indexing (Kotlin 2.3.0+), switch to the official JetBrains backend with `KOTLIN_LSP=jetbrains` (requires `brew install JetBrains/utils/kotlin-lsp`). The JetBrains server auto-cleans up stale RocksDB locks on shutdown to prevent "LOCK: Resource temporarily unavailable" errors.
 
 ### AI Assistant
 - Opencode configuration with specialized agents and plugins
@@ -116,7 +116,7 @@ This config provides full IDE support for Android development with Neovim:
 **Quick Start:**
 1. Open any `.kt` or `.java` file in an Android project
 2. LSP will auto-start and provide IDE features
-3. Use `:Mason` to install missing tools if needed
+3. Use `:Mason` to install missing tools if needed (or `brew install JetBrains/utils/kotlin-lsp` for the JetBrains backend)
 4. Run `:AndroidInfo` to check SDK and project configuration
 
 **Optional Features:**
